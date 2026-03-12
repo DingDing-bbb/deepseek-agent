@@ -1,0 +1,140 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        shell: bash
+        
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm install
+        
+      - name: Build Electron app (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: desktop
+        run: npm run build:mac
+        
+      - name: Build Electron app (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: desktop
+        run: npm run build:win
+        
+      - name: Build Electron app (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: desktop
+        run: npm run build:linux
+        
+      - name: Upload artifacts (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: desktop/release/*.dmg
+          
+      - name: Upload artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: desktop/release/*.exe
+          
+      - name: Upload artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: desktop/release/*.AppImage
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Create extension zip
+        run: |
+          cd extension
+          zip -r ../deepseek-agent-extension.zip .
+          
+      - name: List files
+        run: |
+          echo "=== Artifacts ==="
+          ls -la artifacts/ || true
+          find artifacts -type f || true
+          echo "=== Extension ==="
+          ls -la deepseek-agent-extension.zip || true
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/macos-build/*
+            artifacts/windows-build/*
+            artifacts/linux-build/*
+            deepseek-agent-extension.zip
+          body: |
+            # DeepSeek Agent ${{ github.ref_name }}
+            
+            ## 📥 下载
+            
+            ### 桌面应用
+            | 平台 | 文件 |
+            |------|------|
+            | Windows | `DeepSeek Agent Desktop Setup 1.0.0.exe` |
+            | macOS | `DeepSeek Agent Desktop-1.0.0.dmg` |
+            | Linux | `DeepSeek Agent Desktop-1.0.0.AppImage` |
+            
+            ### 浏览器插件
+            - `deepseek-agent-extension.zip` - 支持 Chrome/Edge/Firefox
+            
+            ### 源代码
+            - `Source code (zip)`
+            - `Source code (tar.gz)`
+            
+            ## 📖 使用说明
+            1. 下载并安装对应平台的桌面应用
+            2. 启动应用，选择工作目录
+            3. 下载浏览器插件并在浏览器中加载
+            4. 访问 chat.deepseek.com 使用
+            
+            ## 🔧 功能
+            - 📁 本地文件系统访问
+            - 💻 Shell 命令执行
+            - 🤖 AI 编程助手
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepSeek Agent Desktop</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+      -webkit-app-region: drag;
+    }
+    
+    .container {
+      padding: 24px;
+      -webkit-app-region: no-drag;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    
+    .logo {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #4d6bfe 0%, #764ba2 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      font-size: 28px;
+    }
+    
+    .title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      font-size: 14px;
+      color: #a0a0a0;
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #a0a0a0;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    
+    .status-item {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+    
+    .status-value {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .status-value.running {
+      color: #4ade80;
+    }
+    
+    .status-value.stopped {
+      color: #f87171;
+    }
+    
+    .status-label {
+      font-size: 12px;
+      color: #a0a0a0;
+    }
+    
+    .folder-selector {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .folder-path {
+      flex: 1;
+      font-size: 13px;
+      color: #d0d0d0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .folder-path.empty {
+      color: #666;
+      font-style: italic;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #4d6bfe 0%, #764ba2 100%);
+      color: #fff;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(77, 107, 254, 0.3);
+    }
+    
+    .instructions {
+      background: rgba(79, 107, 254, 0.1);
+      border: 1px solid rgba(79, 107, 254, 0.2);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #b0b0b0;
+    }
+    
+    .instructions strong {
+      color: #fff;
+    }
+    
+    .instructions ol {
+      margin-left: 20px;
+      margin-top: 8px;
+    }
+    
+    .instructions li {
+      margin-bottom: 6px;
+    }
+    
+    .footer {
+      text-align: center;
+      padding-top: 24px;
+      font-size: 12px;
+      color: #666;
+    }
+    
+    .file-list {
+      max-height: 200px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      padding: 8px;
+      margin-top: 16px;
+    }
+    
+    .file-item {
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    
+    .file-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    
+    .file-icon {
+      font-size: 16px;
+    }
+    
+    .file-name {
+      font-size: 13px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .file-size {
+      font-size: 11px;
+      color: #666;
+    }
+    
+    .prompt-preview {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #b0b0b0;
+      max-height: 150px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">🤖</div>
+      <h1 class="title">DeepSeek Agent Desktop</h1>
+      <p class="subtitle">本地文件访问 & 命令执行服务</p>
+    </div>
+
+    <!-- Status Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>📊</span> 服务状态
+      </div>
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-value running" id="server-status">运行中</div>
+          <div class="status-label">WebSocket 服务</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value" id="client-count">0</div>
+          <div class="status-label">已连接客户端</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>📁</span> 工作目录
+      </div>
+      <div class="folder-selector">
+        <span class="folder-path empty" id="folder-path">点击选择文件夹...</span>
+        <button class="btn btn-primary" id="select-folder-btn">选择文件夹</button>
+      </div>
+      
+      <!-- File List -->
+      <div class="file-list" id="file-list" style="display: none;"></div>
+    </div>
+
+    <!-- System Prompt Preview -->
+    <div class="card" id="prompt-card" style="display: none;">
+      <div class="card-title">
+        <span>💬</span> 系统提示预览
+      </div>
+      <div class="prompt-preview" id="prompt-preview"></div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="card">
+      <div class="card-title">
+        <span>ℹ️</span> 使用说明
+      </div>
+      <div class="instructions">
+        <strong>如何使用：</strong>
+        <ol>
+          <li>选择一个工作目录作为 AI 的工作空间</li>
+          <li>安装浏览器扩展到 Chrome/Edge/Firefox</li>
+          <li>访问 <strong>chat.deepseek.com</strong></li>
+          <li>点击 Agent 按钮，应用会自动连接</li>
+          <li>AI 将可以访问文件和执行命令</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="footer">
+      端口: 3777 | WebSocket 服务
+    </div>
+  </div>
+
+  <script src="../renderer/renderer.js"></script>
+</body>
+</html>
