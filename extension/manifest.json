@@ -35,5 +35,11 @@
   },
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["https://chat.deepseek.com/*"]
+    }
+  ]
 }

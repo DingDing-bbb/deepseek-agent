@@ -10,15 +10,16 @@ let wsServer = null;
 let wsClients = new Set();
 
 // State
-let workspaceFolder = null;
+let baseWorkspaceFolder = null;
 let runningProcesses = new Map();
 let isServerRunning = false;
+let sessionFolders = new Map(); // sessionId -> folder info
 
 // Platform
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 
-// System prompt for coding agent - XML-based protocol
+// System prompt
 const SYSTEM_PROMPT = `你是一位专业的 AI 编程助手，具备完整的本地开发环境访问能力。
 
 ## 你的能力
@@ -28,80 +29,53 @@ const SYSTEM_PROMPT = `你是一位专业的 AI 编程助手，具备完整的�
 \`\`\`xml
 <read_file path="相对或绝对路径" />
 \`\`\`
-示例：
-\`\`\`xml
-<read_file path="src/index.ts" />
-<read_file path="/home/user/project/package.json" />
-\`\`\`
 
 ### 2. 写入/创建文件
 \`\`\`xml
 <write_file path="文件路径">
-文件内容写在这里...
-</write_file>
-\`\`\`
-示例：
-\`\`\`xml
-<write_file path="src/utils/helper.ts">
-export function formatDate(date: Date): string {
-  return date.toLocaleDateString();
-}
+文件内容...
 </write_file>
 \`\`\`
 
-### 3. 编辑文件（追加内容）
+### 3. 编辑文件
 \`\`\`xml
-<edit_file path="文件路径" mode="append">
-要追加的内容...
+<edit_file path="文件路径" mode="append|prepend">
+内容...
 </edit_file>
 \`\`\`
-mode 可选值：append（追加）, prepend（前置）
 
-### 4. 列出目录内容
+### 4. 列出目录
 \`\`\`xml
 <list_dir path="目录路径" />
 \`\`\`
 
-### 5. 删除文件或目录
+### 5. 删除
 \`\`\`xml
 <delete path="路径" />
 \`\`\`
-⚠️ 注意：删除操作不可逆，请在执行前确认
 
 ### 6. 执行命令
 \`\`\`xml
 <execute command="命令" />
 \`\`\`
-示例：
-\`\`\`xml
-<execute command="npm install" />
-<execute command="git status" />
-<execute command="npm run build" />
-\`\`\`
 
 ### 7. 搜索文件
 \`\`\`xml
-<search pattern="搜索模式" path="搜索目录" />
-\`\`\`
-示例：
-\`\`\`xml
-<search pattern="*.ts" path="src" />
+<search pattern="搜索模式" path="目录" />
 \`\`\`
 
-## 工作流程
-1. 当用户提出需求时，先分析需要哪些文件操作
-2. 输出相应的 XML 标签来执行操作
-3. 等待系统返回执行结果
-4. 根据结果继续下一步操作或给用户反馈
+### 8. 设置预览
+\`\`\`xml
+<preview url="http://localhost:3000" />
+\`\`\`
 
 ## 当前工作目录
 {workspace}
 
 ## 重要提醒
-- 所有路径支持相对路径（相对于工作目录）和绝对路径
-- 危险操作（如删除）执行前会提示用户确认
-- 一次可以输出多个 XML 标签，系统会按顺序执行
-- XML 标签必须单独一行输出，便于解析`;
+- 所有路径支持相对和绝对路径
+- 危险操作会确认
+- 一次可输出多个 XML 标签`;
 
 // Create main window
 function createWindow() {
@@ -121,7 +95,6 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-  // Hide to tray on close (instead of quitting)
   mainWindow.on('close', (event) => {
     if (!app.isQuitting) {
       event.preventDefault();
@@ -152,21 +125,111 @@ function createTray() {
   );
 
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: '显示窗口', click: () => mainWindow && mainWindow.show() },
-    { type: 'separator' },
-    { label: workspaceFolder ? '工作目录: ' + workspaceFolder : '未设置工作目录', enabled: false },
-    { type: 'separator' },
-    { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-
-  tray.setToolTip('DeepSeek Agent Desktop');
-  tray.setContextMenu(contextMenu);
+  updateTrayMenu();
 
   tray.on('double-click', () => {
     mainWindow && mainWindow.show();
   });
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: '显示窗口', click: () => mainWindow && mainWindow.show() },
+    { type: 'separator' },
+    { label: baseWorkspaceFolder ? '工作目录: ' + path.basename(baseWorkspaceFolder) : '未设置工作目录', enabled: false },
+    { 
+      label: '更改工作目录',
+      click: async () => {
+        const result = await dialog.showOpenDialog(mainWindow, {
+          properties: ['openDirectory'],
+        });
+        if (!result.canceled && result.filePaths.length > 0) {
+          setBaseWorkspace(result.filePaths[0]);
+        }
+      }
+    },
+    { type: 'separator' },
+    { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+}
+
+// Set base workspace folder
+function setBaseWorkspace(folder) {
+  baseWorkspaceFolder = folder;
+  
+  // Ensure .deepseek-agent folder exists
+  const agentDir = path.join(folder, '.deepseek-agent');
+  if (!fs.existsSync(agentDir)) {
+    fs.mkdirSync(agentDir, { recursive: true });
+  }
+  
+  // Load or create settings
+  const settingsFile = path.join(agentDir, 'settings.json');
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      version: '0.0.1',
+      previewUrl: '',
+      sidebarWidth: 400,
+      sessions: {}
+    }, null, 2));
+  }
+  
+  updateTrayMenu();
+  broadcast({
+    type: 'state',
+    workspace: baseWorkspaceFolder,
+    systemPrompt: SYSTEM_PROMPT.replace('{workspace}', baseWorkspaceFolder),
+  });
+}
+
+// Get session folder path
+function getSessionFolder(sessionId) {
+  if (!baseWorkspaceFolder) return null;
+  return path.join(baseWorkspaceFolder, sessionId);
+}
+
+// Ensure session folder exists with metadata
+function ensureSessionFolder(sessionId, title = 'DeepSeek Chat') {
+  if (!baseWorkspaceFolder) return null;
+  
+  const folder = getSessionFolder(sessionId);
+  if (!fs.existsSync(folder)) {
+    fs.mkdirSync(folder, { recursive: true });
+  }
+  
+  // Create desktop.ini (Windows)
+  const desktopIni = path.join(folder, 'desktop.ini');
+  const iniContent = `[.ShellClassInfo]
+IconResource=chat-icon.ico,0
+[ViewState]
+Mode=
+Vid=
+FolderType=Documents
+Logo=
+[DeepSeek]
+SessionId=${sessionId}
+Title=${title}
+CreatedAt=${new Date().toISOString()}
+`;
+  fs.writeFileSync(desktopIni, iniContent);
+  
+  // Create .directory (Linux/Mac)
+  const directoryFile = path.join(folder, '.directory');
+  const directoryContent = `[Desktop Entry]
+Icon=folder-chat
+Name=${title}
+Comment=DeepSeek Chat Session: ${sessionId}
+DeepSeekSessionId=${sessionId}
+DeepSeekTitle=${title}
+DeepSeekCreatedAt=${new Date().toISOString()}
+`;
+  fs.writeFileSync(directoryFile, directoryContent);
+  
+  return folder;
 }
 
 // Start WebSocket server
@@ -181,11 +244,10 @@ function startWebSocketServer(port = 3777) {
     wsClients.add(ws);
     console.log('Client connected, total:', wsClients.size);
 
-    // Send current state
     ws.send(JSON.stringify({
       type: 'state',
-      workspace: workspaceFolder,
-      systemPrompt: workspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', workspaceFolder) : null,
+      workspace: baseWorkspaceFolder,
+      systemPrompt: baseWorkspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', baseWorkspaceFolder) : null,
     }));
 
     ws.on('message', async (data) => {
@@ -205,7 +267,6 @@ function startWebSocketServer(port = 3777) {
 
     ws.on('close', () => {
       wsClients.delete(ws);
-      console.log('Client disconnected, total:', wsClients.size);
     });
   });
 
@@ -213,7 +274,7 @@ function startWebSocketServer(port = 3777) {
   console.log('WebSocket server started on port ' + port);
 }
 
-// Broadcast to all WebSocket clients
+// Broadcast to all clients
 function broadcast(data) {
   const message = JSON.stringify(data);
   wsClients.forEach(client => {
@@ -229,25 +290,19 @@ async function handleMessage(message, ws) {
     case 'get-state':
       return {
         type: 'state',
-        workspace: workspaceFolder,
-        systemPrompt: workspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', workspaceFolder) : null,
+        workspace: baseWorkspaceFolder,
+        systemPrompt: baseWorkspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', baseWorkspaceFolder) : null,
       };
 
     case 'set-workspace':
-      workspaceFolder = message.path;
-      updateTrayMenu();
-      broadcast({
-        type: 'state',
-        workspace: workspaceFolder,
-        systemPrompt: SYSTEM_PROMPT.replace('{workspace}', workspaceFolder),
-      });
+      setBaseWorkspace(message.path);
       return { type: 'success', message: 'Workspace set' };
 
     case 'read-file':
-      return await readFile(message.path);
+      return await readFile(message.path, message.sessionId);
 
     case 'write-file':
-      return await writeFile(message.path, message.content);
+      return await writeFile(message.path, message.content, message.sessionId);
 
     case 'list-files':
       return await listFiles(message.path, message.recursive);
@@ -255,81 +310,87 @@ async function handleMessage(message, ws) {
     case 'execute':
       return await executeCommand(message.command, message.options);
 
-    case 'kill-process':
-      return killProcess(message.pid);
+    case 'list-session-files':
+      return await listSessionFiles(message.sessionId);
 
-    case 'get-system-prompt':
-      return {
-        type: 'system-prompt',
-        prompt: workspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', workspaceFolder) : null,
-      };
-
-    // Handle batch XML actions
     case 'execute-actions':
-      return await executeActions(message.commands, ws);
+      return await executeActions(message.commands, message.sessionId, ws);
 
     default:
       return { type: 'error', message: 'Unknown message type' };
   }
 }
 
-// Execute multiple actions from XML parsing
-async function executeActions(commands, ws) {
+// Execute multiple XML actions
+async function executeActions(commands, sessionId, ws) {
   const results = [];
+  
+  // Ensure session folder exists
+  if (sessionId && baseWorkspaceFolder) {
+    ensureSessionFolder(sessionId);
+  }
   
   for (const cmd of commands) {
     let result;
     
     switch (cmd.type) {
       case 'read_file':
-        result = await readFile(cmd.path);
+        result = await readFile(cmd.path, sessionId);
         break;
         
       case 'write_file':
-        result = await writeFile(cmd.path, cmd.content);
+        result = await writeFile(cmd.path, cmd.content, sessionId);
         break;
         
       case 'edit_file':
-        result = await editFile(cmd.path, cmd.content, cmd.mode);
+        result = await editFile(cmd.path, cmd.content, cmd.mode, sessionId);
         break;
         
       case 'list_dir':
-        result = await listFiles(cmd.path, false);
+        result = await listFiles(cmd.path, false, sessionId);
         break;
         
       case 'delete':
-        result = await deleteFile(cmd.path);
+        result = await deleteFile(cmd.path, sessionId);
         break;
         
       case 'execute':
-        result = await executeCommand(cmd.command, {});
+        result = await executeCommand(cmd.command, { sessionId });
         break;
         
       case 'search':
-        result = await searchFiles(cmd.pattern, cmd.path);
+        result = await searchFiles(cmd.pattern, cmd.path, sessionId);
         break;
         
       default:
-        result = { type: 'error', message: 'Unknown action type: ' + cmd.type };
+        result = { type: 'error', message: 'Unknown action: ' + cmd.type };
     }
     
-    results.push({
+    const logEntry = {
       type: cmd.type,
       path: cmd.path || cmd.command,
       success: result.type !== 'error',
-      data: result.type === 'error' ? undefined : result,
-      error: result.type === 'error' ? result.message : undefined,
-    });
+      data: result.content || result.files || result.output,
+      error: result.message,
+    };
     
-    // Send each result immediately
+    results.push(logEntry);
+    
+    // Send real-time update
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'action-result',
         action: cmd.type,
+        path: cmd.path || cmd.command,
         success: result.type !== 'error',
-        data: result.content || result.files || result.message,
+        data: logEntry.data ? String(logEntry.data).substring(0, 1000) : null,
         error: result.message,
       }));
+    }
+    
+    // Log to file
+    if (sessionId) {
+      logAction(sessionId, logEntry);
     }
   }
   
@@ -340,20 +401,60 @@ async function executeActions(commands, ws) {
   };
 }
 
-// File operations
-async function readFile(filePath) {
+// Log action to session history
+function logAction(sessionId, entry) {
+  if (!baseWorkspaceFolder) return;
+  
+  const logFile = path.join(baseWorkspaceFolder, '.deepseek-agent', 'actions.json');
+  let logs = [];
+  
+  if (fs.existsSync(logFile)) {
+    try {
+      logs = JSON.parse(fs.readFileSync(logFile, 'utf-8'));
+    } catch (e) {}
+  }
+  
+  logs.unshift({
+    ...entry,
+    sessionId,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Keep last 1000 entries
+  if (logs.length > 1000) logs = logs.slice(0, 1000);
+  
+  fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
+}
+
+// File operations with session context
+function resolvePath(filePath, sessionId) {
+  if (!baseWorkspaceFolder) return filePath;
+  if (path.isAbsolute(filePath)) return filePath;
+  
+  // If session folder exists, use it as base
+  if (sessionId) {
+    const sessionFolder = getSessionFolder(sessionId);
+    if (sessionFolder && fs.existsSync(sessionFolder)) {
+      return path.join(sessionFolder, filePath);
+    }
+  }
+  
+  return path.join(baseWorkspaceFolder, filePath);
+}
+
+async function readFile(filePath, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, filePath) : filePath;
+    const fullPath = resolvePath(filePath, sessionId);
     const content = await fs.promises.readFile(fullPath, 'utf-8');
     return { type: 'file-content', path: filePath, content };
   } catch (error) {
-    return { type: 'error', message: 'Failed to read file: ' + error.message };
+    return { type: 'error', message: 'Failed to read: ' + error.message };
   }
 }
 
-async function writeFile(filePath, content) {
+async function writeFile(filePath, content, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, filePath) : filePath;
+    const fullPath = resolvePath(filePath, sessionId);
     const dir = path.dirname(fullPath);
     
     if (!fs.existsSync(dir)) {
@@ -363,13 +464,13 @@ async function writeFile(filePath, content) {
     await fs.promises.writeFile(fullPath, content, 'utf-8');
     return { type: 'success', message: 'File written: ' + filePath, path: filePath };
   } catch (error) {
-    return { type: 'error', message: 'Failed to write file: ' + error.message };
+    return { type: 'error', message: 'Failed to write: ' + error.message };
   }
 }
 
-async function editFile(filePath, content, mode) {
+async function editFile(filePath, content, mode, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, filePath) : filePath;
+    const fullPath = resolvePath(filePath, sessionId);
     let existingContent = '';
     
     if (fs.existsSync(fullPath)) {
@@ -380,20 +481,19 @@ async function editFile(filePath, content, mode) {
     if (mode === 'prepend') {
       newContent = content + existingContent;
     } else {
-      // default: append
       newContent = existingContent + content;
     }
     
     await fs.promises.writeFile(fullPath, newContent, 'utf-8');
     return { type: 'success', message: 'File edited: ' + filePath, path: filePath };
   } catch (error) {
-    return { type: 'error', message: 'Failed to edit file: ' + error.message };
+    return { type: 'error', message: 'Failed to edit: ' + error.message };
   }
 }
 
-async function deleteFile(filePath) {
+async function deleteFile(filePath, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, filePath) : filePath;
+    const fullPath = resolvePath(filePath, sessionId);
     
     if (fs.existsSync(fullPath)) {
       const stat = await fs.promises.stat(fullPath);
@@ -411,9 +511,9 @@ async function deleteFile(filePath) {
   }
 }
 
-async function searchFiles(pattern, searchPath) {
+async function searchFiles(pattern, searchPath, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, searchPath) : searchPath;
+    const fullPath = resolvePath(searchPath, sessionId);
     const results = [];
     
     const globToRegex = (glob) => {
@@ -423,11 +523,12 @@ async function searchFiles(pattern, searchPath) {
     const search = async (dir) => {
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
+        if (entry.name.startsWith('.')) continue;
+        const entryPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          await search(fullPath);
+          await search(entryPath);
         } else if (globToRegex(pattern).test(entry.name)) {
-          results.push(fullPath);
+          results.push(entryPath);
         }
       }
     };
@@ -439,14 +540,29 @@ async function searchFiles(pattern, searchPath) {
   }
 }
 
-async function listFiles(dirPath = '.', recursive = false) {
+async function listFiles(dirPath = '.', recursive = false, sessionId) {
   try {
-    const fullPath = workspaceFolder ? path.join(workspaceFolder, dirPath) : dirPath;
+    const fullPath = resolvePath(dirPath, sessionId);
     const files = await listFilesRecursive(fullPath, recursive);
     return { type: 'file-list', path: dirPath, files };
   } catch (error) {
-    return { type: 'error', message: 'Failed to list files: ' + error.message };
+    return { type: 'error', message: 'Failed to list: ' + error.message };
   }
+}
+
+async function listSessionFiles(sessionId) {
+  if (!sessionId || !baseWorkspaceFolder) {
+    return { type: 'file-list', files: [] };
+  }
+  
+  const sessionFolder = getSessionFolder(sessionId);
+  if (!fs.existsSync(sessionFolder)) {
+    // Create session folder
+    ensureSessionFolder(sessionId);
+    return { type: 'file-list', path: sessionFolder, files: [] };
+  }
+  
+  return await listFiles('.', true, sessionId);
 }
 
 async function listFilesRecursive(dir, recursive, basePath = '') {
@@ -454,6 +570,8 @@ async function listFilesRecursive(dir, recursive, basePath = '') {
   const files = [];
 
   for (const entry of entries) {
+    if (entry.name.startsWith('.') && entry.name !== '.directory') continue;
+    
     const fullPath = path.join(dir, entry.name);
     const relativePath = basePath ? path.join(basePath, entry.name) : entry.name;
 
@@ -486,13 +604,14 @@ async function listFilesRecursive(dir, recursive, basePath = '') {
 // Command execution
 async function executeCommand(command, options = {}) {
   return new Promise((resolve) => {
-    if (!workspaceFolder) {
+    if (!baseWorkspaceFolder) {
       resolve({ type: 'error', message: 'No workspace folder set' });
       return;
     }
 
-    const cwd = options.cwd || workspaceFolder;
-    const shell = isWin ? 'powershell.exe' : '/bin/bash';
+    const cwd = options.sessionId ? 
+      getSessionFolder(options.sessionId) || baseWorkspaceFolder : 
+      baseWorkspaceFolder;
 
     const proc = spawn(command, [], {
       cwd,
@@ -509,83 +628,24 @@ async function executeCommand(command, options = {}) {
     proc.stdout && proc.stdout.on('data', (data) => {
       const str = data.toString();
       output += str;
-      broadcast({
-        type: 'command-output',
-        pid,
-        data: str,
-        stream: 'stdout',
-      });
     });
 
     proc.stderr && proc.stderr.on('data', (data) => {
       const str = data.toString();
       errorOutput += str;
-      broadcast({
-        type: 'command-output',
-        pid,
-        data: str,
-        stream: 'stderr',
-      });
     });
 
     proc.on('close', (code) => {
       runningProcesses.delete(pid);
-      broadcast({
+      resolve({
         type: 'command-complete',
         pid,
+        command,
         code,
+        output: output || errorOutput,
       });
     });
-
-    resolve({
-      type: 'command-started',
-      pid,
-      command,
-      cwd,
-    });
   });
-}
-
-function killProcess(pid) {
-  const proc = runningProcesses.get(pid);
-  if (proc) {
-    proc.kill();
-    runningProcesses.delete(pid);
-    return { type: 'success', message: 'Process ' + pid + ' killed' };
-  }
-  return { type: 'error', message: 'Process ' + pid + ' not found' };
-}
-
-// Update tray menu
-function updateTrayMenu() {
-  if (!tray) return;
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: '显示窗口', click: () => mainWindow && mainWindow.show() },
-    { type: 'separator' },
-    { label: workspaceFolder ? '工作目录: ' + path.basename(workspaceFolder) : '未设置工作目录', enabled: false },
-    { 
-      label: '更改工作目录',
-      click: async () => {
-        const result = await dialog.showOpenDialog(mainWindow, {
-          properties: ['openDirectory'],
-        });
-        if (!result.canceled && result.filePaths.length > 0) {
-          workspaceFolder = result.filePaths[0];
-          updateTrayMenu();
-          broadcast({
-            type: 'state',
-            workspace: workspaceFolder,
-            systemPrompt: SYSTEM_PROMPT.replace('{workspace}', workspaceFolder),
-          });
-        }
-      }
-    },
-    { type: 'separator' },
-    { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-
-  tray.setContextMenu(contextMenu);
 }
 
 // IPC handlers
@@ -595,43 +655,17 @@ ipcMain.handle('select-folder', async () => {
   });
   
   if (!result.canceled && result.filePaths.length > 0) {
-    workspaceFolder = result.filePaths[0];
-    updateTrayMenu();
-    broadcast({
-      type: 'state',
-      workspace: workspaceFolder,
-      systemPrompt: SYSTEM_PROMPT.replace('{workspace}', workspaceFolder),
-    });
-    return workspaceFolder;
+    setBaseWorkspace(result.filePaths[0]);
+    return baseWorkspaceFolder;
   }
   return null;
 });
 
 ipcMain.handle('get-state', () => ({
-  workspace: workspaceFolder,
+  workspace: baseWorkspaceFolder,
   isServerRunning,
   clientCount: wsClients.size,
 }));
-
-ipcMain.handle('get-system-prompt', () => 
-  workspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', workspaceFolder) : null
-);
-
-ipcMain.handle('execute-command', async (event, command, options) => {
-  return executeCommand(command, options);
-});
-
-ipcMain.handle('read-file', async (event, filePath) => {
-  return readFile(filePath);
-});
-
-ipcMain.handle('write-file', async (event, filePath, content) => {
-  return writeFile(filePath, content);
-});
-
-ipcMain.handle('list-files', async (event, dirPath, recursive) => {
-  return listFiles(dirPath, recursive);
-});
 
 // App lifecycle
 app.whenReady().then(() => {

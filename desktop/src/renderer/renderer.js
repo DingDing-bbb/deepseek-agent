@@ -12,9 +12,10 @@ let state = {
 const folderPathEl = document.getElementById('folder-path');
 const selectFolderBtn = document.getElementById('select-folder-btn');
 const clientCountEl = document.getElementById('client-count');
-const fileListEl = document.getElementById('file-list');
-const promptCardEl = document.getElementById('prompt-card');
-const promptPreviewEl = document.getElementById('prompt-preview');
+const previewUrlInput = document.getElementById('preview-url');
+const savePreviewBtn = document.getElementById('save-preview-btn');
+const sessionsCardEl = document.getElementById('sessions-card');
+const sessionsListEl = document.getElementById('sessions-list');
 
 // Load initial state
 async function loadState() {
@@ -32,13 +33,11 @@ function updateUI() {
   if (state.workspace) {
     folderPathEl.textContent = state.workspace;
     folderPathEl.classList.remove('empty');
-    loadFiles();
-    loadPrompt();
+    loadSessions();
   } else {
-    folderPathEl.textContent = '点击选择文件夹...';
+    folderPathEl.textContent = '点击选择工作空间根目录...';
     folderPathEl.classList.add('empty');
-    fileListEl.style.display = 'none';
-    promptCardEl.style.display = 'none';
+    sessionsCardEl.style.display = 'none';
   }
 
   // Update client count
@@ -58,61 +57,99 @@ async function selectFolder() {
   }
 }
 
-// Load files
-async function loadFiles() {
+// Load sessions from workspace
+async function loadSessions() {
   if (!state.workspace) return;
 
+  const fs = require('fs');
+  const path = require('path');
+
   try {
-    const result = await ipcRenderer.invoke('list-files', '.', false);
-    if (result.type === 'file-list') {
-      renderFiles(result.files);
+    const entries = fs.readdirSync(state.workspace, { withFileTypes: true });
+    const sessions = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+
+      // Check if it's a UUID-like folder
+      const isUUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(entry.name);
+      if (!isUUID) continue;
+
+      const sessionPath = path.join(state.workspace, entry.name);
+      const stat = fs.statSync(sessionPath);
+
+      // Try to read .directory for metadata
+      let title = entry.name.substring(0, 8) + '...';
+      const directoryFile = path.join(sessionPath, '.directory');
+      if (fs.existsSync(directoryFile)) {
+        try {
+          const content = fs.readFileSync(directoryFile, 'utf-8');
+          const match = content.match(/DeepSeekTitle=(.+)/);
+          if (match) title = match[1];
+        } catch (e) {}
+      }
+
+      sessions.push({
+        id: entry.name,
+        name: title,
+        path: sessionPath,
+        modified: stat.mtime
+      });
+    }
+
+    // Sort by modified time
+    sessions.sort((a, b) => b.modified - a.modified);
+
+    if (sessions.length > 0) {
+      sessionsCardEl.style.display = 'block';
+      renderSessions(sessions);
+    } else {
+      sessionsCardEl.style.display = 'none';
     }
   } catch (error) {
-    console.error('Failed to load files:', error);
+    console.error('Failed to load sessions:', error);
   }
 }
 
-// Render file list
-function renderFiles(files) {
-  if (!files || files.length === 0) {
-    fileListEl.style.display = 'none';
-    return;
-  }
-
-  fileListEl.style.display = 'block';
-  fileListEl.innerHTML = files.map(function(file) {
-    return '<div class="file-item">' +
-      '<span class="file-icon">' + (file.type === 'directory' ? '📁' : '📄') + '</span>' +
-      '<span class="file-name">' + file.name + '</span>' +
-      (file.size ? '<span class="file-size">' + formatSize(file.size) + '</span>' : '') +
-    '</div>';
+// Render sessions list
+function renderSessions(sessions) {
+  sessionsListEl.innerHTML = sessions.map(session => {
+    const time = session.modified.toLocaleDateString() + ' ' + 
+                 session.modified.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    return `
+      <div class="session-item">
+        <div class="session-icon">💬</div>
+        <div class="session-info">
+          <div class="session-name">${escapeHtml(session.name)}</div>
+          <div class="session-path">${session.id}</div>
+        </div>
+        <div class="session-time">${time}</div>
+      </div>
+    `;
   }).join('');
 }
 
-// Format file size
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+// Save preview URL
+function savePreviewUrl() {
+  const url = previewUrlInput.value.trim();
+  // This would be sent to the main process and broadcast to clients
+  console.log('Preview URL saved:', url);
 }
 
-// Load system prompt
-async function loadPrompt() {
-  if (!state.workspace) return;
-
-  try {
-    const prompt = await ipcRenderer.invoke('get-system-prompt');
-    if (prompt) {
-      promptPreviewEl.textContent = prompt;
-      promptCardEl.style.display = 'block';
-    }
-  } catch (error) {
-    console.error('Failed to load prompt:', error);
-  }
+// Helper
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // Event listeners
 selectFolderBtn.addEventListener('click', selectFolder);
+savePreviewBtn.addEventListener('click', savePreviewUrl);
+previewUrlInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') savePreviewUrl();
+});
 
 // Refresh state periodically
 setInterval(loadState, 3000);

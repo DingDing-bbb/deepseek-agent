@@ -1,4 +1,4 @@
-# DeepSeek Agent 浏览器插件开发日志
+# DeepSeek Agent 开发日志
 
 ---
 Task ID: 1
@@ -29,24 +29,18 @@ Agent: Main Developer
 Task: 创建 Electron 桌面应用 + GitHub CI/CD
 
 Work Log:
-- 创建 Electron 项目结构（desktop-app 目录）
-- 开发主进程（main.ts）：
+- 创建 Electron 项目结构（desktop 目录）
+- 开发主进程（main.js）：
   - WebSocket 服务器（端口 3777）
   - 文件系统操作（读/写/列出文件）
   - Shell 命令执行
   - 系统托盘集成
-- 开发渲染进程（React UI）：
-  - 文件夹选择界面
-  - 状态显示
-  - 使用说明
-- 开发预加载脚本（IPC 通信）
+- 开发渲染进程（UI）
 - 更新浏览器扩展：
   - 简化为单一 Agent 模式（程序员角色）
   - WebSocket 连接桌面应用
   - 使用 DeepSeek 原生按钮样式
 - 创建 GitHub Actions 工作流（release.yml）
-- 推送代码到 GitHub（DingDing-bbb/deepseek-agent-desktop）
-- 更新网页展示页面
 
 Stage Summary:
 - 完整的 Electron 桌面应用
@@ -54,41 +48,94 @@ Stage Summary:
 - WebSocket 实时通信
 - GitHub CI/CD 自动构建
 - 跨平台支持（Windows/macOS/Linux）
-- 网页已更新展示两个组件
 
 ---
 Task ID: 3
 Agent: Main Developer
-Task: 修复插件注入问题 + 改进 XML 协议
+Task: 重构架构 - 会话文件夹、元数据、侧边栏面板
 
 Work Log:
-- 修复浏览器插件 CSS 样式问题：
-  - 移除了可能影响 DeepSeek 原生元素的 CSS 选择器
-  - 使用更精确的类名 `.ds-agent-toggle-btn` 避免冲突
-  - 简化 CSS 样式，只应用于插件自己的元素
-- 重新设计系统提示词，采用 XML 操作协议：
-  - `<read_file path="..." />` - 读取文件
-  - `<write_file path="...">content</write_file>` - 写入文件
-  - `<edit_file path="..." mode="append/prepend">content</edit_file>` - 编辑文件
-  - `<list_dir path="..." />` - 列出目录
-  - `<delete path="..." />` - 删除文件/目录
-  - `<execute command="..." />` - 执行命令
-  - `<search pattern="..." path="..." />` - 搜索文件
-- 更新 content.js 实现 XML 解析和执行：
-  - 使用正则表达式解析 AI 输出中的 XML 标签
-  - 通过 WebSocket 发送命令到桌面应用
-  - 支持批量执行多个操作
-- 更新桌面应用 main.js 支持新的 XML 命令：
-  - 添加 `execute-actions` 消息处理
-  - 实现 `editFile`、`deleteFile`、`searchFiles` 新功能
-  - 实时反馈执行结果
-- 版本号更新为 0.0.1：
-  - extension/manifest.json: version: "0.0.1"
-  - desktop/package.json: version: "0.0.1"
-  - 网页展示页面版本链接更新
+- 重新设计工作空间架构：
+  - 基础工作目录 + 会话文件夹（UUID = chat_session_id）
+  - `.deepseek-agent/` 隐藏目录存放设置和日志
+  - 每个会话文件夹包含 `desktop.ini` 和 `.directory` 元数据
+- 实现完整的侧边栏面板：
+  - 可拖拽调整大小
+  - 三个标签页：文件 | 预览 | 日志
+  - 文件树展示
+  - 实时预览 iframe
+  - 操作日志历史
+- 实现 XML 操作协议：
+  - `<read_file />` 读取文件
+  - `<write_file />` 写入文件
+  - `<edit_file />` 编辑文件
+  - `<list_dir />` 列出目录
+  - `<delete />` 删除文件
+  - `<execute />` 执行命令
+  - `<search />` 搜索文件
+  - `<preview />` 设置预览 URL
+- 网络请求拦截：
+  - 拦截 `/api/v0/chat_session/create` 获取会话 ID
+  - 拦截 `/api/v0/chat/completion` 解析 SSE 响应
+  - 实时解析 AI 输出中的 XML 命令
+- 桌面应用更新：
+  - 会话文件夹自动创建
+  - `desktop.ini` / `.directory` 元数据生成
+  - 操作日志持久化
+  - 多命令批量执行
 
 Stage Summary:
-- 修复了插件可能导致网站交互失效的问题
-- 实现了完整的 XML 操作协议
-- AI 现在可以通过输出特定格式的 XML 来操作文件和执行命令
+- 完整的分屏 Agent 界面
+- 每个对话独立的工作文件夹
+- 文件元数据支持（名称、图标）
+- 实时 XML 命令解析和执行
+- 操作历史记录
 - 版本统一为 0.0.1
+
+---
+架构说明
+
+## 工作空间结构
+```
+workspace/
+├── .deepseek-agent/
+│   ├── settings.json       # 全局设置
+│   └── actions.json        # 操作日志
+│
+├── f69f4cb8-9ae1-4e78-86c2-55ab5233e563/   # 会话文件夹 (UUID)
+│   ├── desktop.ini         # Windows 元数据 (名称、图标)
+│   ├── .directory          # Linux/Mac 元数据
+│   └── (项目文件...)
+│
+└── 6b182953-bbd3-43f6-8a02-8fa8a9a9cded/
+    ├── desktop.ini
+    ├── .directory
+    └── (项目文件...)
+```
+
+## 通信架构
+```
+DeepSeek Chat (网页)
+    ↓ 注入侧边栏面板
+    ↓ 拦截 API 请求
+    ↓ 解析 AI 响应 XML
+    ↓
+WebSocket (ws://localhost:3777)
+    ↓
+Desktop App (Electron)
+    ↓ 执行文件操作
+    ↓ 执行 Shell 命令
+    ↓
+本地文件系统
+```
+
+## XML 操作协议
+AI 输出特定格式的 XML 标签，插件解析后发送到桌面应用执行：
+- `<read_file path="..." />`
+- `<write_file path="...">content</write_file>`
+- `<edit_file path="..." mode="append|prepend">content</edit_file>`
+- `<list_dir path="..." />`
+- `<delete path="..." />`
+- `<execute command="..." />`
+- `<search pattern="..." path="..." />`
+- `<preview url="..." />`
