@@ -48,20 +48,23 @@ jobs:
         with:
           name: macos-build
           path: desktop/release/*.dmg
-          
+          if-no-files-found: warn
+
       - name: Upload artifacts (Windows)
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
           path: desktop/release/*.exe
-          
+          if-no-files-found: warn
+
       - name: Upload artifacts (Linux)
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
           path: desktop/release/*.AppImage
+          if-no-files-found: warn
 
   release:
     needs: build
@@ -110,9 +113,9 @@ jobs:
             ### 桌面应用
             | 平台 | 文件 |
             |------|------|
-            | Windows | `DeepSeek-Agent-Desktop-Setup-1.0.0.exe` |
-            | macOS | `DeepSeek-Agent-Desktop-1.0.0.dmg` |
-            | Linux | `DeepSeek-Agent-Desktop-1.0.0.AppImage` |
+            | Windows | `DeepSeek-Agent-Desktop-Setup-0.0.1.exe` |
+            | macOS | `DeepSeek-Agent-Desktop-0.0.1.dmg` |
+            | Linux | `DeepSeek-Agent-Desktop-0.0.1.AppImage` |
             
             ### 浏览器插件
             - `deepseek-agent-extension.zip` - 支持 Chrome/Edge/Firefox
