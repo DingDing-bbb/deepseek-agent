@@ -1,15 +1,9 @@
 // DeepSeek Agent Extension - Content Script
-// Connects to local Electron app for file access and command execution
-// v0.0.1 - Clean UI with soft pastel colors
+// Uses Native Messaging for secure communication with desktop app
+// v0.0.1
+
 (function() {
   'use strict';
-
-  // ===================== Configuration =====================
-  var WS_PORT = 3777;
-  var ws = null;
-  var reconnectAttempts = 0;
-  var MAX_RECONNECT_ATTEMPTS = 10;
-  var RECONNECT_DELAY = 3000;
 
   // ===================== State =====================
   var isConnected = false;
@@ -21,7 +15,7 @@
   var actionLogs = [];
   var previewUrl = '';
   var isResizing = false;
-  var currentTheme = 'light'; // 'light' or 'dark'
+  var currentTheme = 'light';
 
   // ===================== SVG Icons =====================
   var Icons = {
@@ -42,15 +36,10 @@
   };
 
   // ===================== Theme Detection =====================
-  // DeepSeek 主题通过 body 的 class 来切换: 'light' 或 'dark'
   function detectTheme() {
-    var body = document.body;
-    
-    // DeepSeek 使用 body.classList 中的 'light' 或 'dark'
-    if (body.classList.contains('dark')) {
+    if (document.body.classList.contains('dark')) {
       return 'dark';
     }
-    
     return 'light';
   }
 
@@ -63,16 +52,62 @@
   }
 
   function applyTheme() {
-    // 只更新 sidebar 的深色模式，按钮使用 DeepSeek 原生样式自动跟随主题
     var sidebar = document.querySelector('.ds-agent-sidebar');
     if (sidebar) {
       sidebar.classList.toggle('ds-dark', currentTheme === 'dark');
     }
   }
 
+  // ===================== Native Messaging Communication =====================
+  // Send message to background script which forwards to native host
+  function sendNativeMessage(message, callback) {
+    chrome.runtime.sendMessage(message, function(response) {
+      if (callback) {
+        callback(response || {});
+      }
+    });
+  }
+
+  // Handle messages from background script
+  chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+    console.log('[DeepSeek Agent] Received message:', message);
+
+    switch (message.type) {
+      case 'state':
+        workspaceFolder = message.workspace;
+        isConnected = !!message.workspace;
+        updateStatus();
+        break;
+
+      case 'action-result':
+        handleActionResult(message);
+        break;
+
+      case 'actions-complete':
+        console.log('[DeepSeek Agent] All actions completed');
+        break;
+    }
+
+    sendResponse({ received: true });
+    return true;
+  });
+
+  // Check connection status
+  function checkConnection() {
+    sendNativeMessage({ type: 'check-connection' }, function(response) {
+      var wasConnected = isConnected;
+      isConnected = response.connected || false;
+      workspaceFolder = response.workspace || null;
+      updateStatus();
+
+      // Try to get state if connected but no workspace
+      if (isConnected && !workspaceFolder) {
+        sendNativeMessage({ type: 'get-state' });
+      }
+    });
+  }
+
   // ===================== System Prompt =====================
-  // 此提示词用于指导 AI 如何使用 XML 标签执行文件操作
-  // 可通过 WebSocket 发送给桌面应用使用
   var SYSTEM_PROMPT = (function() {
     return '你是一位专业的 AI 编程助手，具备完整的本地开发环境访问能力。\n\n' +
     '## 你的能力\n' +
@@ -89,12 +124,11 @@
     '## 重要提醒\n- 所有路径支持相对和绝对路径\n- 危险操作会确认\n- 一次可输出多个 XML 标签';
   })();
 
-  // 获取系统提示词（供外部调用）
   function getSystemPrompt(workspace) {
     return SYSTEM_PROMPT.replace('{workspace}', workspace || '未设置');
   }
 
-  // 导出给外部使用
+  // Export for external use
   window.DeepSeekAgent = {
     getSystemPrompt: getSystemPrompt,
     isConnected: function() { return isConnected; },
@@ -104,13 +138,16 @@
 
   // ===================== Initialize =====================
   function init() {
-    console.log('[DeepSeek Agent] Extension initialized v0.0.1');
+    console.log('[DeepSeek Agent] Extension initialized v0.0.1 (Native Messaging)');
     loadSettings();
-    connectWebSocket();
+    checkConnection();
     observePageChanges();
     injectUI();
     setupMessageObserver();
     setupThemeObserver();
+
+    // Periodically check connection
+    setInterval(checkConnection, 5000);
   }
 
   // Load settings from storage
@@ -140,10 +177,8 @@
 
   // ===================== Theme Observer =====================
   function setupThemeObserver() {
-    // 初始检测
     currentTheme = detectTheme();
 
-    // 监听 class 变化
     var observer = new MutationObserver(function(mutations) {
       mutations.forEach(function(mutation) {
         if (mutation.type === 'attributes') {
@@ -154,7 +189,7 @@
 
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme', 'data-color-mode']
+      attributeFilter: ['class', 'data-theme']
     });
 
     observer.observe(document.body, {
@@ -162,129 +197,9 @@
       attributeFilter: ['class', 'data-theme']
     });
 
-    // 监听系统主题变化
     if (window.matchMedia) {
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
     }
-  }
-
-  // ===================== WebSocket Connection =====================
-  function connectWebSocket() {
-    if (ws && ws.readyState === WebSocket.OPEN) return;
-
-    try {
-      ws = new WebSocket('ws://localhost:' + WS_PORT);
-
-      ws.onopen = function() {
-        console.log('[DeepSeek Agent] Connected to desktop app');
-        isConnected = true;
-        reconnectAttempts = 0;
-        updateStatus();
-        if (ws) {
-          ws.send(JSON.stringify({ type: 'get-state' }));
-        }
-      };
-
-      ws.onmessage = function(event) {
-        try {
-          var message = JSON.parse(event.data);
-          handleServerMessage(message);
-        } catch (error) {
-          console.error('[DeepSeek Agent] Failed to parse message:', error);
-        }
-      };
-
-      ws.onclose = function() {
-        console.log('[DeepSeek Agent] Disconnected from desktop app');
-        isConnected = false;
-        updateStatus();
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-          reconnectAttempts++;
-          setTimeout(connectWebSocket, RECONNECT_DELAY);
-        }
-      };
-
-      ws.onerror = function(error) {
-        console.error('[DeepSeek Agent] WebSocket error:', error);
-      };
-    } catch (error) {
-      console.error('[DeepSeek Agent] Failed to connect:', error);
-    }
-  }
-
-  // Handle messages from Electron app
-  function handleServerMessage(message) {
-    switch (message.type) {
-      case 'state':
-        workspaceFolder = message.workspace;
-        updateStatus();
-        break;
-
-      case 'action-result':
-        handleActionResult(message);
-        break;
-
-      case 'file-list':
-        updateFileList(message.files);
-        break;
-
-      case 'file-content':
-        showToast('文件内容已获取', 'success');
-        break;
-    }
-  }
-
-  // Handle action execution result
-  function handleActionResult(result) {
-    var logEntry = {
-      id: Date.now(),
-      type: result.action,
-      path: result.path || result.command,
-      success: result.success,
-      data: result.data,
-      error: result.error,
-      timestamp: new Date().toISOString()
-    };
-
-    actionLogs.unshift(logEntry);
-    if (actionLogs.length > 50) actionLogs.pop();
-
-    updateLogsPanel();
-    updateActionCard(result);
-
-    if (!result.success) {
-      showToast('操作失败: ' + result.error, 'error');
-    } else {
-      showToast(getActionLabel(result.action) + ' 成功', 'success');
-    }
-  }
-
-  function getActionLabel(action) {
-    var labels = {
-      'read_file': '读取文件',
-      'write_file': '写入文件',
-      'edit_file': '编辑文件',
-      'list_dir': '列出目录',
-      'delete': '删除',
-      'execute': '执行命令',
-      'search': '搜索文件',
-      'preview': '设置预览'
-    };
-    return labels[action] || action;
-  }
-
-  function getActionIcon(action) {
-    var iconMap = {
-      'read_file': Icons.eye,
-      'write_file': Icons.edit,
-      'edit_file': Icons.edit,
-      'list_dir': Icons.folder,
-      'delete': Icons.trash,
-      'execute': Icons.terminal,
-      'search': Icons.search,
-      'preview': Icons.globe
-    };
-    return iconMap[action] || Icons.file;
   }
 
   // ===================== Page Observation =====================
@@ -461,6 +376,34 @@
     '</div>';
   }
 
+  function getActionLabel(action) {
+    var labels = {
+      'read_file': '读取文件',
+      'write_file': '写入文件',
+      'edit_file': '编辑文件',
+      'list_dir': '列出目录',
+      'delete': '删除',
+      'execute': '执行命令',
+      'search': '搜索文件',
+      'preview': '设置预览'
+    };
+    return labels[action] || action;
+  }
+
+  function getActionIcon(action) {
+    var iconMap = {
+      'read_file': Icons.eye,
+      'write_file': Icons.edit,
+      'edit_file': Icons.edit,
+      'list_dir': Icons.folder,
+      'delete': Icons.trash,
+      'execute': Icons.terminal,
+      'search': Icons.search,
+      'preview': Icons.globe
+    };
+    return iconMap[action] || Icons.file;
+  }
+
   // Attach click handlers to cards
   function attachCardHandlers(container) {
     container.querySelectorAll('.ds-action-card').forEach(function(card) {
@@ -511,12 +454,36 @@
     var command = { type: type };
     Object.assign(command, payload);
 
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'execute-actions',
-        sessionId: currentSessionId,
-        commands: [command]
-      }));
+    // Send via Native Messaging
+    sendNativeMessage({
+      type: 'execute-actions',
+      sessionId: currentSessionId,
+      commands: [command]
+    });
+  }
+
+  // Handle action result
+  function handleActionResult(result) {
+    var logEntry = {
+      id: Date.now(),
+      type: result.action,
+      path: result.path || result.command,
+      success: result.success,
+      data: result.data,
+      error: result.error,
+      timestamp: new Date().toISOString()
+    };
+
+    actionLogs.unshift(logEntry);
+    if (actionLogs.length > 50) actionLogs.pop();
+
+    updateLogsPanel();
+    updateActionCard(result);
+
+    if (!result.success) {
+      showToast('操作失败: ' + result.error, 'error');
+    } else {
+      showToast(getActionLabel(result.action) + ' 成功', 'success');
     }
   }
 
@@ -599,14 +566,13 @@
     console.log('[DeepSeek Agent] UI injected successfully');
   }
 
-  // Inject dynamic styles (补充样式，主要样式在 styles.css 中)
+  // Inject dynamic styles
   function injectStyles() {
     if (document.querySelector('#ds-agent-styles')) return;
 
     var style = document.createElement('style');
     style.id = 'ds-agent-styles';
     style.textContent = `
-      /* Agent Button - 使用 DeepSeek 原生样式，仅添加必要的补充 */
       .ds-agent-wrapper {
         cursor: pointer;
       }
@@ -617,12 +583,10 @@
         fill: none;
       }
 
-      /* Sidebar - 动态宽度 */
       .ds-agent-sidebar {
         width: ${sidebarWidth}px;
       }
 
-      /* Toast - 页面级样式 */
       .ds-toast {
         position: fixed;
         bottom: 80px;
@@ -661,19 +625,17 @@
     `;
     document.head.appendChild(style);
   }
-  // Inject Agent button - 使用 DeepSeek 原生按钮样式
+
+  // Inject Agent button using DeepSeek native styles
   function injectAgentButton() {
     var existing = document.querySelector('.ds-agent-wrapper');
     if (existing) existing.remove();
 
-    // 方法1: 直接查找按钮容器 .ec4f5d61（DeepSeek 的按钮行）
     var buttonArea = document.querySelector('.ec4f5d61');
 
-    // 方法2: 如果找不到，通过 textarea 向上查找
     if (!buttonArea) {
       var textarea = document.querySelector('textarea.ds-scroll-area, textarea[placeholder*="DeepSeek"]');
       if (textarea) {
-        // textarea 的祖父容器的下一个兄弟元素通常是按钮区域
         var grandParent = textarea.parentElement ? textarea.parentElement.parentElement : null;
         if (grandParent) {
           buttonArea = grandParent.querySelector('.ec4f5d61') ||
@@ -682,7 +644,6 @@
       }
     }
 
-    // 方法3: 查找包含 ds-toggle-button 的容器
     if (!buttonArea) {
       var toggleBtn = document.querySelector('.ds-toggle-button');
       if (toggleBtn) {
@@ -696,7 +657,6 @@
       return;
     }
 
-    // 创建按钮 - 使用 DeepSeek 原生样式
     var button = document.createElement('div');
     button.setAttribute('role', 'button');
     button.setAttribute('aria-disabled', 'false');
@@ -707,20 +667,17 @@
     }
     button.style.cssText = 'transform: translateZ(0px);';
 
-    // 按钮内容 - 使用 DeepSeek 原生结构
     button.innerHTML =
       '<div class="ds-icon ds-atom-button__icon" style="font-size: 14px; width: 14px; height: 14px; color: var(--dsw-alias-brand-text); margin-right: 0px;">' + Icons.agent + '</div>' +
       '<span><span class="ds-agent-btn-text">Agent</span></span>' +
       '<div class="ds-focus-ring"></div>';
 
-    // 点击事件
     button.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
       toggleAgent();
     });
 
-    // 键盘事件
     button.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -728,7 +685,6 @@
       }
     });
 
-    // 插入到按钮区域的第一个位置
     var firstBtn = buttonArea.querySelector('.ds-atom-button, .ds-toggle-button');
     if (firstBtn) {
       buttonArea.insertBefore(button, firstBtn);
@@ -774,61 +730,44 @@
       '<div class="ds-status-bar">' +
         '<div class="ds-status-row">' +
           '<span class="ds-status-label">连接</span>' +
-          '<span class="ds-status-value ds-disconnected" id="ds-conn-status">未连接</span>' +
+          '<span id="ds-conn-status" class="ds-status-value ds-disconnected">未连接</span>' +
         '</div>' +
         '<div class="ds-status-row">' +
           '<span class="ds-status-label">工作目录</span>' +
-          '<span class="ds-status-value" id="ds-workspace">-</span>' +
-        '</div>' +
-        '<div class="ds-status-row">' +
-          '<span class="ds-status-label">会话</span>' +
-          '<span class="ds-status-value" id="ds-session">-</span>' +
+          '<span id="ds-workspace" class="ds-status-value">未设置</span>' +
         '</div>' +
       '</div>' +
       '<div class="ds-sidebar-content">' +
-        '<div class="ds-panel ds-panel-visible" id="ds-panel-actions">' +
-          '<div class="ds-file-tree" id="ds-action-list">' +
-            '<div style="padding: 20px; text-align: center; color: #9ca3af;">启用 Agent 后，AI 回复中的操作命令会显示为可执行的卡片</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="ds-panel" id="ds-panel-preview">' +
-          '<div class="ds-preview-placeholder" id="ds-preview-placeholder">' +
-            '<span class="ds-icon">' + Icons.globe + '</span>' +
-            '<div>AI 可通过设置预览地址</div>' +
-            '<div style="margin-top: 8px; font-size: 11px;">&lt;preview url="http://..." /&gt;</div>' +
-          '</div>' +
-          '<iframe class="ds-preview-frame" id="ds-preview-frame" style="display: none;"></iframe>' +
-        '</div>' +
-        '<div class="ds-panel" id="ds-panel-logs">' +
-          '<div class="ds-log-list" id="ds-log-list">' +
-            '<div style="padding: 20px; text-align: center; color: #9ca3af;">暂无操作日志</div>' +
-          '</div>' +
-        '</div>' +
+        '<div id="ds-actions-panel" class="ds-panel ds-panel-visible"></div>' +
+        '<div id="ds-preview-panel" class="ds-panel"></div>' +
+        '<div id="ds-logs-panel" class="ds-panel"></div>' +
       '</div>';
 
     document.body.appendChild(sidebar);
 
-    // Tab switching
+    // Tab click handlers
     sidebar.querySelectorAll('.ds-sidebar-tab').forEach(function(tab) {
       tab.addEventListener('click', function() {
-        activeTab = this.dataset.tab;
+        activeTab = tab.dataset.tab;
         updateTabs();
       });
     });
 
     // Close button
-    sidebar.querySelector('.ds-sidebar-close').addEventListener('click', function() {
-      hideSidebar();
-    });
+    sidebar.querySelector('.ds-sidebar-close').addEventListener('click', hideSidebar);
 
-    // Resize handle
+    // Resize
+    setupResize(sidebar);
+  }
+
+  // Setup resize functionality
+  function setupResize(sidebar) {
     var resizeHandle = sidebar.querySelector('.ds-sidebar-resize');
 
     resizeHandle.addEventListener('mousedown', function(e) {
       isResizing = true;
       document.body.style.cursor = 'ew-resize';
       document.body.style.userSelect = 'none';
-      e.preventDefault();
     });
 
     document.addEventListener('mousemove', function(e) {
@@ -850,7 +789,7 @@
     });
   }
 
-  // ===================== Agent Toggle =====================
+  // Toggle Agent
   function toggleAgent() {
     if (!isConnected) {
       showToast('请先启动 DeepSeek Agent 桌面应用', 'warning');
@@ -904,7 +843,6 @@
 
   // ===================== Status Updates =====================
   function updateStatus() {
-    // 更新按钮状态 - 使用 DeepSeek 原生样式
     var btn = document.querySelector('.ds-agent-wrapper');
     if (btn) {
       var text = btn.querySelector('.ds-agent-btn-text');
@@ -922,7 +860,6 @@
       }
     }
 
-    // Update sidebar status
     var connStatus = document.getElementById('ds-conn-status');
     if (connStatus) {
       connStatus.textContent = isConnected ? '已连接' : '未连接';
@@ -931,12 +868,8 @@
 
     var workspaceEl = document.getElementById('ds-workspace');
     if (workspaceEl) {
-      workspaceEl.textContent = workspaceFolder ? workspaceFolder.split('/').pop() : '-';
-    }
-
-    var sessionEl = document.getElementById('ds-session');
-    if (sessionEl) {
-      sessionEl.textContent = currentSessionId ? currentSessionId.substring(0, 8) + '...' : '-';
+      workspaceEl.textContent = workspaceFolder || '未设置';
+      workspaceEl.title = workspaceFolder || '';
     }
   }
 
@@ -947,101 +880,66 @@
     });
 
     document.querySelectorAll('.ds-panel').forEach(function(panel) {
-      panel.classList.toggle('ds-panel-visible', panel.id === 'ds-panel-' + activeTab);
+      panel.classList.remove('ds-panel-visible');
     });
-  }
 
-  // Update file list
-  function updateFileList(files) {
-    var container = document.getElementById('ds-file-tree');
-    if (!container) return;
-
-    if (!files || files.length === 0) {
-      container.innerHTML = '<div style="padding: 20px; text-align: center; color: #9ca3af;">暂无文件</div>';
-      return;
+    var activePanel = document.getElementById('ds-' + activeTab + '-panel');
+    if (activePanel) {
+      activePanel.classList.add('ds-panel-visible');
     }
-
-    var html = '';
-    files.forEach(function(file) {
-      var icon = file.type === 'directory' ? Icons.folder : Icons.file;
-      var size = file.size ? formatSize(file.size) : '';
-      html += '<div class="ds-file-item" data-path="' + escapeHtml(file.path) + '">' +
-        '<span class="ds-icon">' + icon + '</span>' +
-        '<span class="ds-file-name">' + escapeHtml(file.name) + '</span>' +
-        (size ? '<span class="ds-file-size">' + size + '</span>' : '') +
-      '</div>';
-    });
-
-    container.innerHTML = html;
-
-    container.querySelectorAll('.ds-file-item').forEach(function(item) {
-      item.addEventListener('click', function() {
-        var path = this.dataset.path;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'read-file', path: path, sessionId: currentSessionId }));
-        }
-      });
-    });
   }
 
   // Update logs panel
   function updateLogsPanel() {
-    var container = document.getElementById('ds-log-list');
-    if (!container) return;
+    var panel = document.getElementById('ds-logs-panel');
+    if (!panel) return;
 
     if (actionLogs.length === 0) {
-      container.innerHTML = '<div style="padding: 20px; text-align: center; color: #9ca3af;">暂无操作日志</div>';
+      panel.innerHTML = '<div class="ds-log-list"><div style="text-align: center; color: #9ca3af; padding: 40px;">暂无操作日志</div></div>';
       return;
     }
 
-    var html = '';
+    var html = '<div class="ds-log-list">';
     actionLogs.forEach(function(log) {
-      var time = new Date(log.timestamp).toLocaleTimeString();
-      var icon = getActionIcon(log.type);
       html += '<div class="ds-log-item">' +
         '<div class="ds-log-header">' +
           '<span class="ds-log-type ' + log.type + '">' +
-            '<span class="ds-icon">' + icon + '</span>' +
+            '<span class="ds-icon">' + getActionIcon(log.type) + '</span>' +
             getActionLabel(log.type) +
           '</span>' +
-          '<span class="ds-log-time">' + time + '</span>' +
+          '<span class="ds-log-time">' + new Date(log.timestamp).toLocaleTimeString() + '</span>' +
         '</div>' +
-        '<div class="ds-log-path">' + escapeHtml(log.path || log.command || '') + '</div>' +
-        (log.data ? '<div class="ds-log-content">' + escapeHtml(log.data.substring(0, 500)) + '</div>' : '') +
-        (log.error ? '<div class="ds-log-content" style="background: #7f1d1d;">' + escapeHtml(log.error) + '</div>' : '') +
-      '</div>';
-    });
+        '<div class="ds-log-path">' + escapeHtml(log.path || '') + '</div>';
 
-    container.innerHTML = html;
+      if (log.data) {
+        html += '<div class="ds-log-content">' + escapeHtml(log.data.substring(0, 200)) + '</div>';
+      }
+
+      html += '</div>';
+    });
+    html += '</div>';
+
+    panel.innerHTML = html;
   }
 
   // Update preview panel
   function updatePreviewPanel() {
-    var placeholder = document.getElementById('ds-preview-placeholder');
-    var frame = document.getElementById('ds-preview-frame');
+    var panel = document.getElementById('ds-preview-panel');
+    if (!panel) return;
 
-    if (previewUrl) {
-      if (placeholder) placeholder.style.display = 'none';
-      if (frame) {
-        frame.style.display = 'block';
-        frame.src = previewUrl;
-      }
-    } else {
-      if (placeholder) placeholder.style.display = 'flex';
-      if (frame) {
-        frame.style.display = 'none';
-        frame.src = '';
-      }
+    if (!previewUrl) {
+      panel.innerHTML = '<div class="ds-preview-placeholder">' +
+        '<span class="ds-icon">' + Icons.globe + '</span>' +
+        '<div>暂无预览</div>' +
+        '<div style="font-size: 12px; margin-top: 8px;">AI 可以使用 &lt;preview url="..." /&gt; 设置预览</div>' +
+      '</div>';
+      return;
     }
+
+    panel.innerHTML = '<iframe class="ds-preview-frame" src="' + previewUrl + '"></iframe>';
   }
 
   // ===================== Helpers =====================
-  function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  }
-
   function escapeHtml(text) {
     if (!text) return '';
     var div = document.createElement('div');
@@ -1065,7 +963,7 @@
     document.body.appendChild(toast);
 
     setTimeout(function() {
-      toast.style.opacity = '0';
+      toast.classList.add('ds-toast-fade');
       setTimeout(function() {
         if (toast.parentNode) toast.remove();
       }, 300);

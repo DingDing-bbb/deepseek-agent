@@ -1,0 +1,9 @@
+{
+  "name": "com.deepseek.agent",
+  "description": "DeepSeek Agent - Local file access and command execution for AI coding assistant",
+  "path": "{{INSTALL_PATH}}",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://{{EXTENSION_ID}}/"
+  ]
+}

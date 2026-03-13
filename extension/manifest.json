@@ -2,15 +2,14 @@
   "manifest_version": 3,
   "name": "DeepSeek Agent",
   "version": "0.0.1",
-  "description": "Add Agent functionality to DeepSeek Chat with local file access and command execution",
+  "description": "Add Agent functionality to DeepSeek Chat with local file access and command execution via Native Messaging",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "nativeMessaging"
   ],
   "host_permissions": [
-    "https://chat.deepseek.com/*",
-    "http://localhost:3777/*",
-    "ws://localhost:3777/*"
+    "https://chat.deepseek.com/*"
   ],
   "content_scripts": [
     {

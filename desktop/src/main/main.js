@@ -13,13 +13,17 @@ let wsClients = new Set();
 let baseWorkspaceFolder = null;
 let runningProcesses = new Map();
 let isServerRunning = false;
-let sessionFolders = new Map(); // sessionId -> folder info
+let sessionFolders = new Map();
+
+// Native Messaging mode detection
+const isNativeMessagingMode = process.argv.includes('--native-messaging') || 
+                               process.env.NATIVE_MESSAGING === '1';
 
 // Platform
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 
-// System prompt
+// System prompt for AI
 const SYSTEM_PROMPT = `你是一位专业的 AI 编程助手，具备完整的本地开发环境访问能力。
 
 ## 你的能力
@@ -77,7 +81,183 @@ const SYSTEM_PROMPT = `你是一位专业的 AI 编程助手，具备完整的�
 - 危险操作会确认
 - 一次可输出多个 XML 标签`;
 
-// Create main window
+// ===================== Native Messaging =====================
+// Native Messaging uses stdin/stdout with length-prefixed messages
+
+function startNativeMessaging() {
+  console.error('[DeepSeek Agent] Starting in Native Messaging mode');
+
+  // Read messages from stdin
+  let inputBuffer = Buffer.alloc(0);
+
+  process.stdin.on('data', (chunk) => {
+    inputBuffer = Buffer.concat([inputBuffer, chunk]);
+
+    // Try to parse messages
+    while (inputBuffer.length >= 4) {
+      const messageLength = inputBuffer.readUInt32LE(0);
+
+      if (inputBuffer.length < 4 + messageLength) {
+        break; // Need more data
+      }
+
+      const messageData = inputBuffer.slice(4, 4 + messageLength);
+      inputBuffer = inputBuffer.slice(4 + messageLength);
+
+      try {
+        const message = JSON.parse(messageData.toString('utf8'));
+        handleNativeMessage(message);
+      } catch (err) {
+        console.error('[DeepSeek Agent] Failed to parse message:', err);
+      }
+    }
+  });
+
+  process.stdin.on('end', () => {
+    console.error('[DeepSeek Agent] stdin ended, exiting');
+    process.exit(0);
+  });
+
+  process.stdin.on('error', (err) => {
+    console.error('[DeepSeek Agent] stdin error:', err);
+  });
+}
+
+// Send message via Native Messaging (to stdout)
+function sendNativeMessage(message) {
+  const messageStr = JSON.stringify(message);
+  const messageBuffer = Buffer.from(messageStr, 'utf8');
+  const lengthBuffer = Buffer.alloc(4);
+  lengthBuffer.writeUInt32LE(messageBuffer.length, 0);
+
+  process.stdout.write(lengthBuffer);
+  process.stdout.write(messageBuffer);
+}
+
+// Handle messages from browser extension via Native Messaging
+async function handleNativeMessage(message) {
+  console.error('[DeepSeek Agent] Received native message:', message.type);
+
+  let response = null;
+
+  switch (message.type) {
+    case 'get-state':
+      response = {
+        type: 'state',
+        workspace: baseWorkspaceFolder,
+        systemPrompt: baseWorkspaceFolder ? SYSTEM_PROMPT.replace('{workspace}', baseWorkspaceFolder) : null,
+      };
+      break;
+
+    case 'set-workspace':
+      setBaseWorkspace(message.path);
+      response = { type: 'success', message: 'Workspace set' };
+      break;
+
+    case 'read-file':
+      response = await readFile(message.path, message.sessionId);
+      break;
+
+    case 'write-file':
+      response = await writeFile(message.path, message.content, message.sessionId);
+      break;
+
+    case 'list-files':
+      response = await listFiles(message.path, message.recursive, message.sessionId);
+      break;
+
+    case 'execute':
+      response = await executeCommand(message.command, { sessionId: message.sessionId });
+      break;
+
+    case 'list-session-files':
+      response = await listSessionFiles(message.sessionId);
+      break;
+
+    case 'execute-actions':
+      response = await executeActionsNative(message.commands, message.sessionId);
+      break;
+
+    default:
+      response = { type: 'error', message: 'Unknown message type: ' + message.type };
+  }
+
+  if (response) {
+    sendNativeMessage(response);
+  }
+}
+
+// Execute multiple actions and send updates via Native Messaging
+async function executeActionsNative(commands, sessionId) {
+  if (sessionId && baseWorkspaceFolder) {
+    ensureSessionFolder(sessionId);
+  }
+
+  const results = [];
+
+  for (const cmd of commands) {
+    let result;
+
+    switch (cmd.type) {
+      case 'read_file':
+        result = await readFile(cmd.path, sessionId);
+        break;
+      case 'write_file':
+        result = await writeFile(cmd.path, cmd.content, sessionId);
+        break;
+      case 'edit_file':
+        result = await editFile(cmd.path, cmd.content, cmd.mode, sessionId);
+        break;
+      case 'list_dir':
+        result = await listFiles(cmd.path, false, sessionId);
+        break;
+      case 'delete':
+        result = await deleteFile(cmd.path, sessionId);
+        break;
+      case 'execute':
+        result = await executeCommand(cmd.command, { sessionId });
+        break;
+      case 'search':
+        result = await searchFiles(cmd.pattern, cmd.path, sessionId);
+        break;
+      default:
+        result = { type: 'error', message: 'Unknown action: ' + cmd.type };
+    }
+
+    const logEntry = {
+      type: cmd.type,
+      path: cmd.path || cmd.command,
+      success: result.type !== 'error',
+      data: result.content || result.files || result.output,
+      error: result.message,
+    };
+
+    results.push(logEntry);
+
+    // Send real-time update via Native Messaging
+    sendNativeMessage({
+      type: 'action-result',
+      action: cmd.type,
+      path: cmd.path || cmd.command,
+      success: result.type !== 'error',
+      data: logEntry.data ? String(logEntry.data).substring(0, 1000) : null,
+      error: result.message,
+    });
+
+    if (sessionId) {
+      logAction(sessionId, logEntry);
+    }
+  }
+
+  return {
+    type: 'actions-complete',
+    total: commands.length,
+    results,
+  };
+}
+
+// ===================== GUI Mode =====================
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 500,
@@ -108,10 +288,9 @@ function createWindow() {
   });
 }
 
-// Create system tray
 function createTray() {
   const icon = nativeImage.createFromDataURL(
-    'data:image/svg+xml;base64,' + 
+    'data:image/svg+xml;base64,' +
     Buffer.from(`
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
         <circle cx="32" cy="32" r="28" fill="#4d6bfe"/>
@@ -140,7 +319,7 @@ function updateTrayMenu() {
     { label: '显示窗口', click: () => mainWindow && mainWindow.show() },
     { type: 'separator' },
     { label: baseWorkspaceFolder ? '工作目录: ' + path.basename(baseWorkspaceFolder) : '未设置工作目录', enabled: false },
-    { 
+    {
       label: '更改工作目录',
       click: async () => {
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -161,14 +340,12 @@ function updateTrayMenu() {
 // Set base workspace folder
 function setBaseWorkspace(folder) {
   baseWorkspaceFolder = folder;
-  
-  // Ensure .deepseek-agent folder exists
+
   const agentDir = path.join(folder, '.deepseek-agent');
   if (!fs.existsSync(agentDir)) {
     fs.mkdirSync(agentDir, { recursive: true });
   }
-  
-  // Load or create settings
+
   const settingsFile = path.join(agentDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(settingsFile, JSON.stringify({
@@ -178,8 +355,8 @@ function setBaseWorkspace(folder) {
       sessions: {}
     }, null, 2));
   }
-  
-  updateTrayMenu();
+
+  if (tray) updateTrayMenu();
   broadcast({
     type: 'state',
     workspace: baseWorkspaceFolder,
@@ -187,53 +364,42 @@ function setBaseWorkspace(folder) {
   });
 }
 
-// Get session folder path
+// ===================== Session Management =====================
+
 function getSessionFolder(sessionId) {
   if (!baseWorkspaceFolder) return null;
   return path.join(baseWorkspaceFolder, sessionId);
 }
 
-// Ensure session folder exists with metadata
 function ensureSessionFolder(sessionId, title = 'DeepSeek Chat') {
   if (!baseWorkspaceFolder) return null;
-  
+
   const folder = getSessionFolder(sessionId);
   if (!fs.existsSync(folder)) {
     fs.mkdirSync(folder, { recursive: true });
   }
-  
-  // Create desktop.ini (Windows)
+
+  // Create metadata files
   const desktopIni = path.join(folder, 'desktop.ini');
-  const iniContent = `[.ShellClassInfo]
+  if (!fs.existsSync(desktopIni)) {
+    fs.writeFileSync(desktopIni, `[.ShellClassInfo]
 IconResource=chat-icon.ico,0
 [ViewState]
 Mode=
 Vid=
 FolderType=Documents
-Logo=
 [DeepSeek]
 SessionId=${sessionId}
 Title=${title}
 CreatedAt=${new Date().toISOString()}
-`;
-  fs.writeFileSync(desktopIni, iniContent);
-  
-  // Create .directory (Linux/Mac)
-  const directoryFile = path.join(folder, '.directory');
-  const directoryContent = `[Desktop Entry]
-Icon=folder-chat
-Name=${title}
-Comment=DeepSeek Chat Session: ${sessionId}
-DeepSeekSessionId=${sessionId}
-DeepSeekTitle=${title}
-DeepSeekCreatedAt=${new Date().toISOString()}
-`;
-  fs.writeFileSync(directoryFile, directoryContent);
-  
+`);
+  }
+
   return folder;
 }
 
-// Start WebSocket server
+// ===================== WebSocket Server =====================
+
 function startWebSocketServer(port = 3777) {
   if (wsServer) {
     wsServer.close();
@@ -254,14 +420,14 @@ function startWebSocketServer(port = 3777) {
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
-        const response = await handleMessage(message, ws);
+        const response = await handleServerMessage(message, ws);
         if (response) {
           ws.send(JSON.stringify(response));
         }
       } catch (error) {
-        ws.send(JSON.stringify({ 
-          type: 'error', 
-          message: error.message || 'Unknown error' 
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: error.message || 'Unknown error'
         }));
       }
     });
@@ -275,7 +441,6 @@ function startWebSocketServer(port = 3777) {
   console.log('WebSocket server started on port ' + port);
 }
 
-// Broadcast to all clients
 function broadcast(data) {
   const message = JSON.stringify(data);
   wsClients.forEach(client => {
@@ -285,8 +450,8 @@ function broadcast(data) {
   });
 }
 
-// Handle messages from browser extension
-async function handleMessage(message, ws) {
+// Handle messages from browser extension via WebSocket
+async function handleServerMessage(message, ws) {
   switch (message.type) {
     case 'get-state':
       return {
@@ -322,51 +487,43 @@ async function handleMessage(message, ws) {
   }
 }
 
-// Execute multiple XML actions
+// Execute multiple XML actions via WebSocket
 async function executeActions(commands, sessionId, ws) {
   const results = [];
-  
-  // Ensure session folder exists
+
   if (sessionId && baseWorkspaceFolder) {
     ensureSessionFolder(sessionId);
   }
-  
+
   for (const cmd of commands) {
     let result;
-    
+
     switch (cmd.type) {
       case 'read_file':
         result = await readFile(cmd.path, sessionId);
         break;
-        
       case 'write_file':
         result = await writeFile(cmd.path, cmd.content, sessionId);
         break;
-        
       case 'edit_file':
         result = await editFile(cmd.path, cmd.content, cmd.mode, sessionId);
         break;
-        
       case 'list_dir':
         result = await listFiles(cmd.path, false, sessionId);
         break;
-        
       case 'delete':
         result = await deleteFile(cmd.path, sessionId);
         break;
-        
       case 'execute':
         result = await executeCommand(cmd.command, { sessionId });
         break;
-        
       case 'search':
         result = await searchFiles(cmd.pattern, cmd.path, sessionId);
         break;
-        
       default:
         result = { type: 'error', message: 'Unknown action: ' + cmd.type };
     }
-    
+
     const logEntry = {
       type: cmd.type,
       path: cmd.path || cmd.command,
@@ -374,10 +531,9 @@ async function executeActions(commands, sessionId, ws) {
       data: result.content || result.files || result.output,
       error: result.message,
     };
-    
+
     results.push(logEntry);
-    
-    // Send real-time update
+
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'action-result',
@@ -388,13 +544,12 @@ async function executeActions(commands, sessionId, ws) {
         error: result.message,
       }));
     }
-    
-    // Log to file
+
     if (sessionId) {
       logAction(sessionId, logEntry);
     }
   }
-  
+
   return {
     type: 'actions-complete',
     total: commands.length,
@@ -402,44 +557,19 @@ async function executeActions(commands, sessionId, ws) {
   };
 }
 
-// Log action to session history
-function logAction(sessionId, entry) {
-  if (!baseWorkspaceFolder) return;
-  
-  const logFile = path.join(baseWorkspaceFolder, '.deepseek-agent', 'actions.json');
-  let logs = [];
-  
-  if (fs.existsSync(logFile)) {
-    try {
-      logs = JSON.parse(fs.readFileSync(logFile, 'utf-8'));
-    } catch (e) {}
-  }
-  
-  logs.unshift({
-    ...entry,
-    sessionId,
-    timestamp: new Date().toISOString()
-  });
-  
-  // Keep last 1000 entries
-  if (logs.length > 1000) logs = logs.slice(0, 1000);
-  
-  fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
-}
+// ===================== File Operations =====================
 
-// File operations with session context
 function resolvePath(filePath, sessionId) {
   if (!baseWorkspaceFolder) return filePath;
   if (path.isAbsolute(filePath)) return filePath;
-  
-  // If session folder exists, use it as base
+
   if (sessionId) {
     const sessionFolder = getSessionFolder(sessionId);
     if (sessionFolder && fs.existsSync(sessionFolder)) {
       return path.join(sessionFolder, filePath);
     }
   }
-  
+
   return path.join(baseWorkspaceFolder, filePath);
 }
 
@@ -457,11 +587,11 @@ async function writeFile(filePath, content, sessionId) {
   try {
     const fullPath = resolvePath(filePath, sessionId);
     const dir = path.dirname(fullPath);
-    
+
     if (!fs.existsSync(dir)) {
       await fs.promises.mkdir(dir, { recursive: true });
     }
-    
+
     await fs.promises.writeFile(fullPath, content, 'utf-8');
     return { type: 'success', message: 'File written: ' + filePath, path: filePath };
   } catch (error) {
@@ -473,18 +603,18 @@ async function editFile(filePath, content, mode, sessionId) {
   try {
     const fullPath = resolvePath(filePath, sessionId);
     let existingContent = '';
-    
+
     if (fs.existsSync(fullPath)) {
       existingContent = await fs.promises.readFile(fullPath, 'utf-8');
     }
-    
+
     let newContent;
     if (mode === 'prepend') {
       newContent = content + existingContent;
     } else {
       newContent = existingContent + content;
     }
-    
+
     await fs.promises.writeFile(fullPath, newContent, 'utf-8');
     return { type: 'success', message: 'File edited: ' + filePath, path: filePath };
   } catch (error) {
@@ -495,7 +625,7 @@ async function editFile(filePath, content, mode, sessionId) {
 async function deleteFile(filePath, sessionId) {
   try {
     const fullPath = resolvePath(filePath, sessionId);
-    
+
     if (fs.existsSync(fullPath)) {
       const stat = await fs.promises.stat(fullPath);
       if (stat.isDirectory()) {
@@ -516,11 +646,11 @@ async function searchFiles(pattern, searchPath, sessionId) {
   try {
     const fullPath = resolvePath(searchPath, sessionId);
     const results = [];
-    
+
     const globToRegex = (glob) => {
       return new RegExp('^' + glob.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
     };
-    
+
     const search = async (dir) => {
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -533,7 +663,7 @@ async function searchFiles(pattern, searchPath, sessionId) {
         }
       }
     };
-    
+
     await search(fullPath);
     return { type: 'search-results', pattern, path: searchPath, results };
   } catch (error) {
@@ -555,14 +685,13 @@ async function listSessionFiles(sessionId) {
   if (!sessionId || !baseWorkspaceFolder) {
     return { type: 'file-list', files: [] };
   }
-  
+
   const sessionFolder = getSessionFolder(sessionId);
   if (!fs.existsSync(sessionFolder)) {
-    // Create session folder
     ensureSessionFolder(sessionId);
     return { type: 'file-list', path: sessionFolder, files: [] };
   }
-  
+
   return await listFiles('.', true, sessionId);
 }
 
@@ -572,7 +701,7 @@ async function listFilesRecursive(dir, recursive, basePath = '') {
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') && entry.name !== '.directory') continue;
-    
+
     const fullPath = path.join(dir, entry.name);
     const relativePath = basePath ? path.join(basePath, entry.name) : entry.name;
 
@@ -602,7 +731,8 @@ async function listFilesRecursive(dir, recursive, basePath = '') {
   return files;
 }
 
-// Command execution
+// ===================== Command Execution =====================
+
 async function executeCommand(command, options = {}) {
   return new Promise((resolve) => {
     if (!baseWorkspaceFolder) {
@@ -610,8 +740,8 @@ async function executeCommand(command, options = {}) {
       return;
     }
 
-    const cwd = options.sessionId ? 
-      getSessionFolder(options.sessionId) || baseWorkspaceFolder : 
+    const cwd = options.sessionId ?
+      getSessionFolder(options.sessionId) || baseWorkspaceFolder :
       baseWorkspaceFolder;
 
     const proc = spawn(command, [], {
@@ -627,13 +757,11 @@ async function executeCommand(command, options = {}) {
     let errorOutput = '';
 
     proc.stdout && proc.stdout.on('data', (data) => {
-      const str = data.toString();
-      output += str;
+      output += data.toString();
     });
 
     proc.stderr && proc.stderr.on('data', (data) => {
-      const str = data.toString();
-      errorOutput += str;
+      errorOutput += data.toString();
     });
 
     proc.on('close', (code) => {
@@ -649,12 +777,38 @@ async function executeCommand(command, options = {}) {
   });
 }
 
-// IPC handlers
+// ===================== Action Logging =====================
+
+function logAction(sessionId, entry) {
+  if (!baseWorkspaceFolder) return;
+
+  const logFile = path.join(baseWorkspaceFolder, '.deepseek-agent', 'actions.json');
+  let logs = [];
+
+  if (fs.existsSync(logFile)) {
+    try {
+      logs = JSON.parse(fs.readFileSync(logFile, 'utf-8'));
+    } catch (e) {}
+  }
+
+  logs.unshift({
+    ...entry,
+    sessionId,
+    timestamp: new Date().toISOString()
+  });
+
+  if (logs.length > 1000) logs = logs.slice(0, 1000);
+
+  fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
+}
+
+// ===================== IPC Handlers =====================
+
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
   });
-  
+
   if (!result.canceled && result.filePaths.length > 0) {
     setBaseWorkspace(result.filePaths[0]);
     return baseWorkspaceFolder;
@@ -668,34 +822,42 @@ ipcMain.handle('get-state', () => ({
   clientCount: wsClients.size,
 }));
 
-// App lifecycle
-app.whenReady().then(() => {
-  createWindow();
-  createTray();
-  startWebSocketServer();
-});
+// ===================== App Lifecycle =====================
 
-app.on('window-all-closed', () => {
-  if (!isMac) {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+// Check if running in Native Messaging mode
+if (isNativeMessagingMode) {
+  // Native Messaging mode - no GUI, just handle stdin/stdout
+  startNativeMessaging();
+} else {
+  // GUI mode - normal Electron app
+  app.whenReady().then(() => {
     createWindow();
-  } else {
-    mainWindow && mainWindow.show();
-  }
-});
+    createTray();
+    startWebSocketServer();
+  });
 
-app.on('before-quit', () => {
-  app.isQuitting = true;
-  
-  runningProcesses.forEach((proc) => proc.kill());
-  runningProcesses.clear();
-  
-  if (wsServer) {
-    wsServer.close();
-  }
-});
+  app.on('window-all-closed', () => {
+    if (!isMac) {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    } else {
+      mainWindow && mainWindow.show();
+    }
+  });
+
+  app.on('before-quit', () => {
+    app.isQuitting = true;
+
+    runningProcesses.forEach((proc) => proc.kill());
+    runningProcesses.clear();
+
+    if (wsServer) {
+      wsServer.close();
+    }
+  });
+}

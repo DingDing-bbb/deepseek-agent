@@ -5,6 +5,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
+    "native": "node src/main/main.js --native-messaging",
     "build": "electron-builder",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
@@ -27,7 +28,8 @@
     },
     "files": [
       "src/**/*",
-      "package.json"
+      "package.json",
+      "native-host/**/*"
     ],
     "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
     "artifactName": "${productName}-${version}.${ext}",
