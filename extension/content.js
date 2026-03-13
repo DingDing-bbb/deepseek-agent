@@ -16,7 +16,6 @@
   var workspaceFolder = null;
   var currentSessionId = null;
   var agentEnabled = false;
-  var sidebarVisible = false;
   var sidebarWidth = 400;
   var activeTab = 'actions';
   var actionLogs = [];
@@ -43,32 +42,15 @@
   };
 
   // ===================== Theme Detection =====================
-  // TODO: 将由用户指定具体的选择器来检测主题
-  // 当前使用备用方案：检测 class 或 data-theme
+  // DeepSeek 主题通过 body 的 class 来切换: 'light' 或 'dark'
   function detectTheme() {
-    // 方案1: 检测 html 或 body 的 class
-    var html = document.documentElement;
     var body = document.body;
-
-    // 常见的深色模式 class
-    if (html.classList.contains('dark') ||
-        html.classList.contains('theme-dark') ||
-        body.classList.contains('dark') ||
-        body.classList.contains('theme-dark')) {
+    
+    // DeepSeek 使用 body.classList 中的 'light' 或 'dark'
+    if (body.classList.contains('dark')) {
       return 'dark';
     }
-
-    // 方案2: 检测 data-theme 属性
-    var theme = html.getAttribute('data-theme') ||
-                body.getAttribute('data-theme') ||
-                html.getAttribute('data-color-mode');
-    if (theme === 'dark') return 'dark';
-
-    // 方案3: 检测 prefers-color-scheme
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
-    }
-
+    
     return 'light';
   }
 
@@ -81,6 +63,7 @@
   }
 
   function applyTheme() {
+    // 只更新 sidebar 的深色模式，按钮使用 DeepSeek 原生样式自动跟随主题
     var sidebar = document.querySelector('.ds-agent-sidebar');
     if (sidebar) {
       sidebar.classList.toggle('ds-dark', currentTheme === 'dark');
@@ -88,8 +71,10 @@
   }
 
   // ===================== System Prompt =====================
-  var SYSTEM_PROMPT =
-    '你是一位专业的 AI 编程助手，具备完整的本地开发环境访问能力。\n\n' +
+  // 此提示词用于指导 AI 如何使用 XML 标签执行文件操作
+  // 可通过 WebSocket 发送给桌面应用使用
+  var SYSTEM_PROMPT = (function() {
+    return '你是一位专业的 AI 编程助手，具备完整的本地开发环境访问能力。\n\n' +
     '## 你的能力\n' +
     '你可以通过输出特定的 XML 标签来执行以下操作：\n\n' +
     '### 读取文件\n```xml\n<read_file path="相对或绝对路径" />\n```\n\n' +
@@ -102,6 +87,20 @@
     '### 设置预览\n```xml\n<preview url="http://localhost:3000" />\n```\n\n' +
     '## 当前工作目录\n{workspace}\n\n' +
     '## 重要提醒\n- 所有路径支持相对和绝对路径\n- 危险操作会确认\n- 一次可输出多个 XML 标签';
+  })();
+
+  // 获取系统提示词（供外部调用）
+  function getSystemPrompt(workspace) {
+    return SYSTEM_PROMPT.replace('{workspace}', workspace || '未设置');
+  }
+
+  // 导出给外部使用
+  window.DeepSeekAgent = {
+    getSystemPrompt: getSystemPrompt,
+    isConnected: function() { return isConnected; },
+    isEnabled: function() { return agentEnabled; },
+    getWorkspace: function() { return workspaceFolder; }
+  };
 
   // ===================== Initialize =====================
   function init() {
@@ -119,7 +118,10 @@
     try {
       chrome.storage.local.get(['sidebarWidth', 'previewUrl', 'agentEnabled'], function(result) {
         if (result.sidebarWidth) sidebarWidth = result.sidebarWidth;
-        if (result.previewUrl) previewUrl = result.previewUrl;
+        if (result.previewUrl) {
+          previewUrl = result.previewUrl;
+          updatePreviewPanel();
+        }
         if (result.agentEnabled) agentEnabled = result.agentEnabled;
       });
     } catch (e) {
@@ -500,7 +502,6 @@
     var type = card.dataset.type;
     var payload = JSON.parse(card.dataset.payload);
     var statusEl = card.querySelector('.ds-card-status');
-    var resultEl = card.querySelector('.ds-card-result');
     var executeBtn = card.querySelector('.ds-btn-execute');
 
     statusEl.className = 'ds-card-status ds-status-running';
@@ -598,536 +599,30 @@
     console.log('[DeepSeek Agent] UI injected successfully');
   }
 
-  // Inject all styles
+  // Inject dynamic styles (补充样式，主要样式在 styles.css 中)
   function injectStyles() {
     if (document.querySelector('#ds-agent-styles')) return;
 
     var style = document.createElement('style');
     style.id = 'ds-agent-styles';
     style.textContent = `
-      /* Agent Button */
+      /* Agent Button - 使用 DeepSeek 原生样式，仅添加必要的补充 */
       .ds-agent-wrapper {
-        position: relative;
-        z-index: 100;
-      }
-
-      .ds-agent-toggle-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        padding: 0 14px;
-        height: 36px;
-        font-size: 14px;
-        font-weight: 500;
-        border-radius: 20px;
         cursor: pointer;
-        transition: all 0.2s ease;
-        border: 1px solid #e5e7eb;
-        background: #fff;
-        color: #374151;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
 
-      .ds-agent-toggle-btn:hover {
-        border-color: #d1d5db;
-        background: #f9fafb;
+      .ds-agent-wrapper .ds-icon svg {
+        stroke: currentColor;
+        stroke-width: 1.5;
+        fill: none;
       }
 
-      .ds-agent-toggle-btn.ds-agent-active {
-        border-color: #4d6bfe;
-        background: linear-gradient(135deg, #4d6bfe 0%, #6366f1 100%);
-        color: #fff;
-      }
-
-      .ds-agent-toggle-btn .ds-icon {
-        width: 16px;
-        height: 16px;
-      }
-
-      /* Sidebar */
+      /* Sidebar - 动态宽度 */
       .ds-agent-sidebar {
-        position: fixed;
-        top: 0;
-        right: 0;
-        height: 100vh;
         width: ${sidebarWidth}px;
-        background: #fafafa;
-        border-left: 1px solid #e5e7eb;
-        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.08);
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        transform: translateX(100%);
-        transition: transform 0.3s ease;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
 
-      .ds-agent-sidebar.ds-sidebar-visible {
-        transform: translateX(0);
-      }
-
-      .ds-sidebar-resize {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 4px;
-        height: 100%;
-        cursor: ew-resize;
-        background: transparent;
-        transition: background 0.2s;
-      }
-
-      .ds-sidebar-resize:hover {
-        background: #4d6bfe;
-      }
-
-      .ds-sidebar-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #fff;
-        color: #374151;
-      }
-
-      .ds-sidebar-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 15px;
-        font-weight: 600;
-      }
-
-      .ds-sidebar-title .ds-icon {
-        width: 18px;
-        height: 18px;
-        color: #4d6bfe;
-      }
-
-      .ds-sidebar-close {
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        border: none;
-        background: #f3f4f6;
-        color: #6b7280;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.2s;
-      }
-
-      .ds-sidebar-close:hover {
-        background: #e5e7eb;
-        color: #374151;
-      }
-
-      .ds-sidebar-close .ds-icon {
-        width: 14px;
-        height: 14px;
-      }
-
-      .ds-sidebar-tabs {
-        display: flex;
-        border-bottom: 1px solid #e5e7eb;
-        background: #fff;
-      }
-
-      .ds-sidebar-tab {
-        flex: 1;
-        padding: 12px;
-        text-align: center;
-        font-size: 13px;
-        font-weight: 500;
-        color: #6b7280;
-        cursor: pointer;
-        border-bottom: 2px solid transparent;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-      }
-
-      .ds-sidebar-tab .ds-icon {
-        width: 14px;
-        height: 14px;
-      }
-
-      .ds-sidebar-tab:hover {
-        color: #374151;
-        background: #f9fafb;
-      }
-
-      .ds-sidebar-tab.ds-tab-active {
-        color: #4d6bfe;
-        border-bottom-color: #4d6bfe;
-        background: #fff;
-      }
-
-      .ds-sidebar-content {
-        flex: 1;
-        overflow: auto;
-      }
-
-      .ds-panel {
-        display: none;
-        height: 100%;
-      }
-
-      .ds-panel.ds-panel-visible {
-        display: block;
-      }
-
-      /* Status Bar */
-      .ds-status-bar {
-        padding: 12px 16px;
-        background: #fff;
-        border-bottom: 1px solid #e5e7eb;
-        font-size: 12px;
-      }
-
-      .ds-status-row {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 4px;
-      }
-
-      .ds-status-row:last-child {
-        margin-bottom: 0;
-      }
-
-      .ds-status-label {
-        color: #9ca3af;
-      }
-
-      .ds-status-value {
-        font-weight: 500;
-        color: #374151;
-      }
-
-      .ds-status-value.ds-connected {
-        color: #10b981;
-      }
-
-      .ds-status-value.ds-disconnected {
-        color: #ef4444;
-      }
-
-      /* Action Cards - 淡白色系，低饱和度 */
-      .ds-action-card {
-        margin: 12px 0;
-        border-radius: 12px;
-        border: 1px solid #e5e7eb;
-        overflow: hidden;
-        background: #fefefe;
-        font-size: 13px;
-      }
-
-      .ds-card-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 14px;
-        border-bottom: 1px solid #f0f0f0;
-      }
-
-      .ds-card-icon {
-        width: 16px;
-        height: 16px;
-        flex-shrink: 0;
-      }
-
-      .ds-card-title {
-        font-weight: 500;
-        flex: 1;
-        color: #374151;
-      }
-
-      .ds-card-status {
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-weight: 500;
-      }
-
-      .ds-status-pending {
-        background: #f5f5f5;
-        color: #9ca3af;
-      }
-
-      .ds-status-running {
-        background: #f0f7ff;
-        color: #3b82f6;
-      }
-
-      .ds-status-success {
-        background: #f0fdf4;
-        color: #22c55e;
-      }
-
-      .ds-status-error {
-        background: #fef2f2;
-        color: #ef4444;
-      }
-
-      .ds-card-body {
-        padding: 12px 14px;
-        background: #fafafa;
-      }
-
-      .ds-card-detail {
-        margin-bottom: 6px;
-      }
-
-      .ds-card-detail:last-child {
-        margin-bottom: 0;
-      }
-
-      .ds-card-label {
-        color: #9ca3af;
-        font-size: 11px;
-      }
-
-      .ds-card-detail code {
-        background: #f0f0f0;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 12px;
-        font-family: ui-monospace, monospace;
-        word-break: break-all;
-        color: #525252;
-      }
-
-      .ds-card-content pre {
-        margin: 6px 0 0;
-        padding: 8px;
-        background: #1f2937;
-        color: #e5e7eb;
-        border-radius: 6px;
-        font-size: 11px;
-        overflow-x: auto;
-        font-family: ui-monospace, monospace;
-      }
-
-      .ds-card-footer {
-        display: flex;
-        gap: 8px;
-        padding: 10px 14px;
-        border-top: 1px solid #f0f0f0;
-      }
-
-      .ds-card-btn {
-        padding: 6px 14px;
-        font-size: 12px;
-        font-weight: 500;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.2s;
-        border: 1px solid #e5e7eb;
-        background: #fff;
-        color: #374151;
-      }
-
-      .ds-card-btn:hover {
-        background: #f9fafb;
-        border-color: #d1d5db;
-      }
-
-      .ds-card-btn.ds-btn-execute {
-        background: #4d6bfe;
-        color: #fff;
-        border-color: #4d6bfe;
-      }
-
-      .ds-card-btn.ds-btn-execute:hover {
-        background: #4365fe;
-      }
-
-      .ds-card-btn.ds-btn-execute:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-
-      .ds-card-result {
-        padding: 12px 14px;
-        border-top: 1px solid #f0f0f0;
-      }
-
-      .ds-result-success pre,
-      .ds-result-error {
-        padding: 8px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-family: ui-monospace, monospace;
-      }
-
-      .ds-result-success pre {
-        background: #1f2937;
-        color: #e5e7eb;
-      }
-
-      .ds-result-error {
-        background: #fef2f2;
-        color: #dc2626;
-      }
-
-      /* Card color variants - 淡白色系 */
-      .ds-card-blue .ds-card-header { background: #f8fafc; }
-      .ds-card-green .ds-card-header { background: #f9fafb; }
-      .ds-card-amber .ds-card-header { background: #fefdfb; }
-      .ds-card-purple .ds-card-header { background: #faf9fb; }
-      .ds-card-red .ds-card-header { background: #fefafa; }
-      .ds-card-orange .ds-card-header { background: #fffbf5; }
-      .ds-card-cyan .ds-card-header { background: #f5fcfc; }
-      .ds-card-indigo .ds-card-header { background: #f7f8fc; }
-
-      .ds-card-blue .ds-card-icon { color: #64748b; }
-      .ds-card-green .ds-card-icon { color: #6b7280; }
-      .ds-card-amber .ds-card-icon { color: #92702a; }
-      .ds-card-purple .ds-card-icon { color: #7c6f8a; }
-      .ds-card-red .ds-card-icon { color: #b86b6b; }
-      .ds-card-orange .ds-card-icon { color: #a67c52; }
-      .ds-card-cyan .ds-card-icon { color: #5f8a8a; }
-      .ds-card-indigo .ds-card-icon { color: #6366a0; }
-
-      /* Log List */
-      .ds-log-list {
-        padding: 8px;
-      }
-
-      .ds-log-item {
-        padding: 12px;
-        border-radius: 8px;
-        margin-bottom: 8px;
-        font-size: 12px;
-        background: #fff;
-        border: 1px solid #e5e7eb;
-      }
-
-      .ds-log-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 8px;
-      }
-
-      .ds-log-type {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        font-weight: 500;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-      }
-
-      .ds-log-type .ds-icon {
-        width: 12px;
-        height: 12px;
-      }
-
-      .ds-log-type.read_file { background: #f0f7ff; color: #4b5563; }
-      .ds-log-type.write_file { background: #f0fdf4; color: #4b5563; }
-      .ds-log-type.execute { background: #fefce8; color: #4b5563; }
-      .ds-log-type.delete { background: #fef2f2; color: #4b5563; }
-
-      .ds-log-time {
-        font-size: 11px;
-        color: #9ca3af;
-      }
-
-      .ds-log-path {
-        font-family: ui-monospace, monospace;
-        background: #f5f5f5;
-        padding: 4px 8px;
-        border-radius: 4px;
-        word-break: break-all;
-        font-size: 11px;
-        color: #525252;
-      }
-
-      .ds-log-content {
-        margin-top: 8px;
-        max-height: 100px;
-        overflow: auto;
-        background: #1f2937;
-        color: #d1d5db;
-        padding: 8px;
-        border-radius: 6px;
-        font-family: ui-monospace, monospace;
-        font-size: 11px;
-        white-space: pre-wrap;
-      }
-
-      /* Preview Frame */
-      .ds-preview-frame {
-        width: 100%;
-        height: 100%;
-        border: none;
-        background: #fff;
-      }
-
-      .ds-preview-placeholder {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100%;
-        color: #9ca3af;
-        text-align: center;
-        padding: 20px;
-      }
-
-      .ds-preview-placeholder .ds-icon {
-        width: 48px;
-        height: 48px;
-        margin-bottom: 16px;
-        opacity: 0.5;
-      }
-
-      /* File Tree */
-      .ds-file-tree {
-        padding: 8px;
-      }
-
-      .ds-file-item {
-        display: flex;
-        align-items: center;
-        padding: 8px 12px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        gap: 8px;
-      }
-
-      .ds-file-item:hover {
-        background: #f5f5f5;
-      }
-
-      .ds-file-item .ds-icon {
-        width: 16px;
-        height: 16px;
-        flex-shrink: 0;
-        color: #9ca3af;
-      }
-
-      .ds-file-name {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .ds-file-size {
-        font-size: 11px;
-        color: #9ca3af;
-      }
-
-      /* Toast */
+      /* Toast - 页面级样式 */
       .ds-toast {
         position: fixed;
         bottom: 80px;
@@ -1155,238 +650,93 @@
         to { opacity: 1; transform: translateX(-50%) translateY(0); }
       }
 
-      /* ==================== Dark Mode ==================== */
-      .ds-agent-sidebar.ds-dark {
-        background: #1a1a1a;
-        border-left-color: #2a2a2a;
+      .ds-toast-fade {
+        animation: ds-toast-out 0.3s ease forwards;
       }
 
-      .ds-agent-sidebar.ds-dark .ds-sidebar-header {
-        background: #222;
-        border-bottom-color: #2a2a2a;
-        color: #e5e5e5;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-title .ds-icon {
-        color: #818cf8;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-close {
-        background: #333;
-        color: #9ca3af;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-close:hover {
-        background: #444;
-        color: #e5e5e5;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-tabs {
-        background: #1f1f1f;
-        border-bottom-color: #2a2a2a;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-tab {
-        color: #6b7280;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-tab:hover {
-        color: #9ca3af;
-        background: #282828;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-sidebar-tab.ds-tab-active {
-        color: #818cf8;
-        border-bottom-color: #818cf8;
-        background: #222;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-bar {
-        background: #1f1f1f;
-        border-bottom-color: #2a2a2a;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-label {
-        color: #6b7280;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-value {
-        color: #e5e5e5;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-log-item {
-        background: #222;
-        border-color: #333;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-log-path {
-        background: #333;
-        color: #a3a3a3;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-file-item:hover {
-        background: #282828;
-      }
-
-      /* Dark Mode Cards - 深色背景下淡灰色系 */
-      .ds-agent-sidebar.ds-dark .ds-action-card {
-        background: #222;
-        border-color: #333;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-header {
-        border-bottom-color: #333;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-title {
-        color: #e5e5e5;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-body {
-        background: #1f1f1f;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-detail code {
-        background: #333;
-        color: #a3a3a3;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-footer {
-        border-top-color: #333;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-btn {
-        background: #333;
-        border-color: #444;
-        color: #e5e5e5;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-btn:hover {
-        background: #444;
-        border-color: #555;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-card-result {
-        border-top-color: #333;
-      }
-
-      /* Dark card color variants */
-      .ds-agent-sidebar.ds-dark .ds-card-blue .ds-card-header { background: #232629; }
-      .ds-agent-sidebar.ds-dark .ds-card-green .ds-card-header { background: #232423; }
-      .ds-agent-sidebar.ds-dark .ds-card-amber .ds-card-header { background: #252320; }
-      .ds-agent-sidebar.ds-dark .ds-card-purple .ds-card-header { background: #242326; }
-      .ds-agent-sidebar.ds-dark .ds-card-red .ds-card-header { background: #262222; }
-      .ds-agent-sidebar.ds-dark .ds-card-orange .ds-card-header { background: #262218; }
-      .ds-agent-sidebar.ds-dark .ds-card-cyan .ds-card-header { background: #202424; }
-      .ds-agent-sidebar.ds-dark .ds-card-indigo .ds-card-header { background: #22223a; }
-
-      .ds-agent-sidebar.ds-dark .ds-card-blue .ds-card-icon { color: #94a3b8; }
-      .ds-agent-sidebar.ds-dark .ds-card-green .ds-card-icon { color: #9ca3af; }
-      .ds-agent-sidebar.ds-dark .ds-card-amber .ds-card-icon { color: #c4a35a; }
-      .ds-agent-sidebar.ds-dark .ds-card-purple .ds-card-icon { color: #a89cb8; }
-      .ds-agent-sidebar.ds-dark .ds-card-red .ds-card-icon { color: #c88080; }
-      .ds-agent-sidebar.ds-dark .ds-card-orange .ds-card-icon { color: #c49a6c; }
-      .ds-agent-sidebar.ds-dark .ds-card-cyan .ds-card-icon { color: #8ab8b8; }
-      .ds-agent-sidebar.ds-dark .ds-card-indigo .ds-card-icon { color: #9899c8; }
-
-      /* Dark status */
-      .ds-agent-sidebar.ds-dark .ds-status-pending {
-        background: #333;
-        color: #6b7280;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-running {
-        background: #1e3a5f;
-        color: #60a5fa;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-success {
-        background: #1a2e1a;
-        color: #4ade80;
-      }
-
-      .ds-agent-sidebar.ds-dark .ds-status-error {
-        background: #2a1a1a;
-        color: #f87171;
-      }
-
-      /* Dark toast */
-      .ds-agent-sidebar.ds-dark .ds-toast.ds-toast-success { background: #1a2e1a; color: #4ade80; border-color: #2d4a2d; }
-      .ds-agent-sidebar.ds-dark .ds-toast.ds-toast-error { background: #2a1a1a; color: #f87171; border-color: #4a2d2d; }
-      .ds-agent-sidebar.ds-dark .ds-toast.ds-toast-warning { background: #2a2a1a; color: #facc15; border-color: #4a4a2d; }
-      .ds-agent-sidebar.ds-dark .ds-toast.ds-toast-info { background: #1a2a3a; color: #60a5fa; border-color: #2d4a5a; }
-
-      /* Dark button */
-      .ds-dark .ds-agent-toggle-btn {
-        background: #333;
-        border-color: #444;
-        color: #e5e5e5;
-      }
-
-      .ds-dark .ds-agent-toggle-btn:hover {
-        background: #444;
+      @keyframes ds-toast-out {
+        from { opacity: 1; transform: translateX(-50%) translateY(0); }
+        to { opacity: 0; transform: translateX(-50%) translateY(-10px); }
       }
     `;
     document.head.appendChild(style);
   }
-
-  // Inject Agent button
+  // Inject Agent button - 使用 DeepSeek 原生按钮样式
   function injectAgentButton() {
     var existing = document.querySelector('.ds-agent-wrapper');
     if (existing) existing.remove();
 
-    var containers = document.querySelectorAll('[class*="input-container"], [class*="chat-input"]');
-    var container = null;
+    // 方法1: 直接查找按钮容器 .ec4f5d61（DeepSeek 的按钮行）
+    var buttonArea = document.querySelector('.ec4f5d61');
 
-    for (var i = 0; i < containers.length; i++) {
-      if (containers[i].querySelector('textarea, input[type="text"]')) {
-        container = containers[i];
-        break;
+    // 方法2: 如果找不到，通过 textarea 向上查找
+    if (!buttonArea) {
+      var textarea = document.querySelector('textarea.ds-scroll-area, textarea[placeholder*="DeepSeek"]');
+      if (textarea) {
+        // textarea 的祖父容器的下一个兄弟元素通常是按钮区域
+        var grandParent = textarea.parentElement ? textarea.parentElement.parentElement : null;
+        if (grandParent) {
+          buttonArea = grandParent.querySelector('.ec4f5d61') ||
+                       grandParent.nextElementSibling;
+        }
       }
     }
 
-    if (!container && containers.length > 0) {
-      container = containers[0];
+    // 方法3: 查找包含 ds-toggle-button 的容器
+    if (!buttonArea) {
+      var toggleBtn = document.querySelector('.ds-toggle-button');
+      if (toggleBtn) {
+        buttonArea = toggleBtn.parentElement;
+      }
     }
 
-    if (!container) {
-      console.log('[DeepSeek Agent] Could not find input container, will retry');
+    if (!buttonArea) {
+      console.log('[DeepSeek Agent] Could not find button area, will retry');
       setTimeout(injectAgentButton, 2000);
       return;
     }
 
-    var wrapper = document.createElement('div');
-    wrapper.className = 'ds-agent-wrapper';
-    wrapper.style.cssText = 'display: inline-flex; margin-right: 8px;';
+    // 创建按钮 - 使用 DeepSeek 原生样式
+    var button = document.createElement('div');
+    button.setAttribute('role', 'button');
+    button.setAttribute('aria-disabled', 'false');
+    button.setAttribute('tabindex', '0');
+    button.className = 'ds-agent-wrapper ds-atom-button ds-toggle-button ds-toggle-button--md';
+    if (agentEnabled) {
+      button.classList.add('ds-toggle-button--selected');
+    }
+    button.style.cssText = 'transform: translateZ(0px);';
 
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'ds-agent-toggle-btn';
+    // 按钮内容 - 使用 DeepSeek 原生结构
     button.innerHTML =
-      '<span class="ds-icon">' + Icons.agent + '</span>' +
-      '<span class="ds-agent-btn-text">Agent</span>';
+      '<div class="ds-icon ds-atom-button__icon" style="font-size: 14px; width: 14px; height: 14px; color: var(--dsw-alias-brand-text); margin-right: 0px;">' + Icons.agent + '</div>' +
+      '<span><span class="ds-agent-btn-text">Agent</span></span>' +
+      '<div class="ds-focus-ring"></div>';
 
+    // 点击事件
     button.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
       toggleAgent();
     });
 
-    wrapper.appendChild(button);
-
-    var attachmentArea = container.querySelector('[class*="attachment"]');
-    if (attachmentArea && attachmentArea.parentNode) {
-      attachmentArea.parentNode.insertBefore(wrapper, attachmentArea);
-    } else {
-      var actionsArea = container.querySelector('[class*="actions"]');
-      if (actionsArea) {
-        actionsArea.insertBefore(wrapper, actionsArea.firstChild);
-      } else {
-        container.appendChild(wrapper);
+    // 键盘事件
+    button.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleAgent();
       }
+    });
+
+    // 插入到按钮区域的第一个位置
+    var firstBtn = buttonArea.querySelector('.ds-atom-button, .ds-toggle-button');
+    if (firstBtn) {
+      buttonArea.insertBefore(button, firstBtn);
+    } else {
+      buttonArea.insertBefore(button, buttonArea.firstChild);
     }
 
-    console.log('[DeepSeek Agent] Button injected');
+    console.log('[DeepSeek Agent] Button injected successfully');
   }
 
   // Inject Sidebar
@@ -1538,7 +888,6 @@
 
   // Show sidebar
   function showSidebar() {
-    sidebarVisible = true;
     var sidebar = document.querySelector('.ds-agent-sidebar');
     if (sidebar) {
       sidebar.classList.add('ds-sidebar-visible');
@@ -1547,7 +896,6 @@
 
   // Hide sidebar
   function hideSidebar() {
-    sidebarVisible = false;
     var sidebar = document.querySelector('.ds-agent-sidebar');
     if (sidebar) {
       sidebar.classList.remove('ds-sidebar-visible');
@@ -1556,19 +904,20 @@
 
   // ===================== Status Updates =====================
   function updateStatus() {
-    var btn = document.querySelector('.ds-agent-toggle-btn');
+    // 更新按钮状态 - 使用 DeepSeek 原生样式
+    var btn = document.querySelector('.ds-agent-wrapper');
     if (btn) {
       var text = btn.querySelector('.ds-agent-btn-text');
       if (text) {
         if (!isConnected) {
           text.textContent = 'Agent (离线)';
-          btn.classList.remove('ds-agent-active');
+          btn.classList.remove('ds-toggle-button--selected');
         } else if (!workspaceFolder) {
           text.textContent = 'Agent';
-          btn.classList.remove('ds-agent-active');
+          btn.classList.remove('ds-toggle-button--selected');
         } else {
-          text.textContent = agentEnabled ? 'Agent' : 'Agent';
-          btn.classList.toggle('ds-agent-active', agentEnabled);
+          text.textContent = 'Agent';
+          btn.classList.toggle('ds-toggle-button--selected', agentEnabled);
         }
       }
     }
