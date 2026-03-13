@@ -122,12 +122,12 @@ export default function Home() {
   };
 
   const version = 'v0.0.1';
-  const releaseUrl = 'https://github.com/DingDing-bbb/deepseek-agent/releases';
-  // Direct download links from GitHub release
+  const releaseUrl = 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/tag/v0.0.1';
+  // Direct download links from GitHub release (v0.0.1)
   const downloads = {
-    windows: 'https://github.com/DingDing-bbb/deepseek-agent/releases/download/untagged-45a55fb5a26eb0fc80e6/DeepSeek-Agent-Desktop-Setup-1.0.0.exe',
-    macos: 'https://github.com/DingDing-bbb/deepseek-agent/releases/download/untagged-45a55fb5a26eb0fc80e6/DeepSeek-Agent-Desktop-1.0.0.dmg',
-    linux: 'https://github.com/DingDing-bbb/deepseek-agent/releases/download/untagged-45a55fb5a26eb0fc80e6/DeepSeek-Agent-Desktop-1.0.0.AppImage',
+    windows: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-Setup-0.0.1.exe',
+    macos: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.dmg',
+    linux: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.AppImage',
   };
 
   return (
