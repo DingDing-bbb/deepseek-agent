@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -97,30 +96,6 @@ function LinuxIconSVG() {
 }
 
 export default function Home() {
-  const [downloading, setDownloading] = useState<string | null>(null);
-
-  const handleDownloadExtension = async () => {
-    setDownloading('extension');
-    try {
-      const response = await fetch('/api/download-extension');
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'deepseek-agent-extension.zip';
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        a.remove();
-      }
-    } catch (error) {
-      console.error('Download failed:', error);
-    } finally {
-      setDownloading(null);
-    }
-  };
-
   const version = 'v0.0.1';
   const releaseUrl = 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/tag/v0.0.1';
   // Direct download links from GitHub release (v0.0.1)
@@ -128,6 +103,7 @@ export default function Home() {
     windows: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-Setup-0.0.1.exe',
     macos: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.dmg',
     linux: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.AppImage',
+    extension: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/deepseek-agent-extension.zip',
   };
 
   return (
@@ -265,14 +241,15 @@ export default function Home() {
                 <p className="text-sm text-slate-600 dark:text-slate-400">
                   支持 Chrome、Edge、Brave、Firefox 浏览器
                 </p>
-                <Button 
-                  className="w-full"
-                  onClick={handleDownloadExtension}
-                  disabled={downloading === 'extension'}
+                <a 
+                  href={downloads.extension}
+                  className="block"
                 >
-                  <Download className="w-4 h-4 mr-2" />
-                  {downloading === 'extension' ? '下载中...' : '下载插件 ZIP'}
-                </Button>
+                  <Button className="w-full">
+                    <Download className="w-4 h-4 mr-2" />
+                    下载插件 ZIP
+                  </Button>
+                </a>
               </CardContent>
             </Card>
 
