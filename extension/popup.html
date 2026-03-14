@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepSeek Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+    }
+    
+    .header {
+      padding: 20px;
+      text-align: center;
+      background: linear-gradient(135deg, #4d6bfe 0%, #764ba2 100%);
+    }
+    
+    .header h1 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .header p { font-size: 12px; opacity: 0.9; }
+    
+    .content { padding: 16px; }
+    
+    .status-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+    
+    .status-label { font-size: 13px; color: #a0a0a0; }
+    .status-value { font-size: 13px; font-weight: 500; }
+    .status-value.connected { color: #4ade80; }
+    .status-value.disconnected { color: #f87171; }
+    
+    .info-box {
+      background: rgba(79, 107, 254, 0.1);
+      border: 1px solid rgba(79, 107, 254, 0.2);
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #b0b0b0;
+    }
+    
+    .info-box strong { color: #fff; }
+    .info-box ol { margin-left: 16px; margin-top: 8px; }
+    .info-box li { margin-bottom: 4px; }
+    
+    .footer {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      text-align: center;
+      font-size: 11px;
+      color: #666;
+    }
+    
+    .version { color: #4d6bfe; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 DeepSeek Agent</h1>
+    <p>本地文件访问 & 命令执行</p>
+  </div>
+
+  <div class="content">
+    <div class="status-card">
+      <div class="status-item">
+        <span class="status-label">桌面应用</span>
+        <span class="status-value disconnected" id="connection-status">检测中...</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">工作目录</span>
+        <span class="status-value" id="workspace-status">未设置</span>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <strong>使用说明：</strong>
+      <ol>
+        <li>启动 DeepSeek Agent Desktop 应用</li>
+        <li>在应用中选择工作目录</li>
+        <li>安装浏览器插件（Native Messaging）</li>
+        <li>访问 chat.deepseek.com</li>
+        <li>点击 Agent 按钮激活</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="footer">
+    版本 <span class="version">0.0.1</span> | Native Messaging
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
