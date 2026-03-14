@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DeepSeek Agent",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Add Agent functionality to DeepSeek Chat with local file access and command execution via Native Messaging",
   "permissions": [
     "storage",

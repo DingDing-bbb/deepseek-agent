@@ -96,14 +96,14 @@ function LinuxIconSVG() {
 }
 
 export default function Home() {
-  const version = 'v0.0.1';
-  const releaseUrl = 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/tag/v0.0.1';
-  // Direct download links from GitHub release (v0.0.1)
+  const version = 'v0.0.2';
+  const releaseUrl = 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/tag/v0.0.2';
+  // Direct download links from GitHub release (v0.0.2)
   const downloads = {
-    windows: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-Setup-0.0.1.exe',
-    macos: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.dmg',
-    linux: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/DeepSeek-Agent-Desktop-0.0.1.AppImage',
-    extension: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.1/deepseek-agent-extension.zip',
+    windows: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.2/DeepSeek-Agent-Desktop-Setup-0.0.2.exe',
+    macos: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.2/DeepSeek-Agent-Desktop-0.0.2.dmg',
+    linux: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.2/DeepSeek-Agent-Desktop-0.0.2.AppImage',
+    extension: 'https://github.com/DingDing-bbb/deepseek-agent-extension/releases/download/v0.0.2/deepseek-agent-extension.zip',
   };
 
   return (
@@ -342,7 +342,7 @@ export default function Home() {
             <CardHeader>
               <CardTitle>工作原理</CardTitle>
               <CardDescription>
-                桌面应用通过 WebSocket 与浏览器插件通信
+                桌面应用通过 Native Messaging 与浏览器插件通信（更稳定安全）
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -357,8 +357,8 @@ export default function Home() {
                   </div>
                   
                   <div className="flex flex-col items-center text-slate-400">
-                    <span className="text-sm mb-1">WebSocket</span>
-                    <span className="text-xs">端口 3777</span>
+                    <span className="text-sm mb-1">Native Messaging</span>
+                    <span className="text-xs">Chrome API</span>
                     <div className="hidden md:block text-2xl">←→</div>
                     <div className="md:hidden text-2xl">↕</div>
                   </div>
@@ -442,7 +442,7 @@ export default function Home() {
                       <div className="w-6 h-6 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center text-green-600 dark:text-green-300 flex-shrink-0">
                         <CheckCircle2 className="w-4 h-4" />
                       </div>
-                      <span>应用会在后台运行，监听 WebSocket 端口 3777</span>
+                      <span>应用会在后台运行，通过 Native Messaging 与插件通信</span>
                     </div>
                     
                     {/* Windows SmartScreen Warning */}
