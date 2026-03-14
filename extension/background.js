@@ -25,7 +25,7 @@ function log(...args) {
 }
 
 function error(...args) {
-  console.error('[DeepSeek Agent]', ...args;
+  console.error('[DeepSeek Agent]', ...args);
 }
 
 // ===================== Native Messaging 连接 =====================
